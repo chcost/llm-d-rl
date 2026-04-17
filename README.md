@@ -71,6 +71,26 @@ Two implementations of the `EngineClient` interface:
 - `VLLMClient` — real HTTP calls to vLLM dev-mode endpoints (requires `VLLM_SERVER_DEV_MODE=1`)
 - `SimulatedEngineClient` — forwards health checks to a real server, no-ops everything else (for GPU-free testing)
 
+## Inference routing
+
+The rollout controller supports two inference dispatch modes:
+
+**Direct dispatch (default, local dev)** — the controller picks the first ready engine from its pool and forwards `/v1/completions` directly. No infrastructure dependencies beyond the engines themselves.
+
+**Router dispatch (`--router-url`)** — the controller forwards `/v1/completions` to an [Envoy Gateway](https://gateway.envoyproxy.io/) fronted by the llm-d [inference router](https://github.com/llm-d/llm-d-inference-scheduler). The router selects the optimal vLLM pod using KV-cache hit rate and load metrics, giving significantly better throughput for multi-turn RL rollouts where prompts share a common prefix.
+
+```
+Training loop
+  └─ POST /v1/generate {session_id, prompt}
+       └─ Rollout Controller
+            ├─ [--router-url set]  POST /v1/completions + X-Session-ID ──► Envoy Gateway ──► Inference Router ──► best vLLM pod
+            └─ [no --router-url]   POST /v1/completions ──► first ready vLLM pod (direct)
+```
+
+The `session_id` field in the generate request is forwarded as the `X-Session-ID` header, which the inference router uses for session affinity — steering repeated requests for the same RL episode to the pod that already has the relevant KV cache populated.
+
+Weight sync operations always bypass the router and go directly to each engine pod via the pod watcher, since they require per-engine control (pause, update_weights, resume).
+
 ## Quick start
 
 ### Build
@@ -140,13 +160,18 @@ kubectl create secret generic hf-token \
 kubectl apply -f deploy/cks/vllm-engine.yaml
 kubectl -n llm-d-rl wait --for=condition=ready pod -l app=vllm-engine --timeout=600s
 
-# 4. Deploy rollout controller
+# 4. Deploy rollout controller (includes RBAC for pod discovery)
 kubectl apply -f deploy/cks/rollout-controller.yaml
 kubectl -n llm-d-rl wait --for=condition=ready pod -l app=rollout-controller --timeout=120s
 
 # 5. Run the NCCL weight trainer
+# Token IDs — direct dispatch (no router):
 kubectl apply -f deploy/cks/trainer-job.yaml
 kubectl -n llm-d-rl logs -f job/nccl-trainer
+
+# Text prompts — router path (requires llm-d inference stack, see README-llmd.md):
+kubectl apply -f deploy/cks/trainer-job-textinput.yaml
+kubectl -n llm-d-rl logs -f job/nccl-trainer-text
 ```
 
 See `deploy/cks/` for the full manifests.
@@ -159,11 +184,28 @@ The controller has no Kubernetes dependencies — it's a standalone binary that 
 
 ```
 --port                    HTTP server port (default: 8090)
---engines                 Comma-separated engine URLs (e.g., http://localhost:8000,http://localhost:8001)
 --health-check-interval   Interval between engine health checks (default: 30s)
 --simulate-lifecycle      No-op lifecycle operations for GPU-free demos
 --version                 Print version and exit
+
+Engine discovery (Kubernetes):
+--engine-selector         Label selector for vLLM engine pods (e.g., llm-d-role=rollout-engine)
+--engine-port             vLLM HTTP port on engine pods (default: 8000)
+--namespace               Kubernetes namespace to watch (default: NAMESPACE env, then "default")
+--kubeconfig              Path to kubeconfig file (default: in-cluster config)
+
+Engine discovery (static, for local dev):
+--engines                 Comma-separated engine URLs (e.g., http://localhost:8000)
+
+Inference routing:
+--router-url              Inference router/gateway URL for prefix-cache-aware routing (e.g., http://envoy-gateway:80)
+--tokens-in               Send token-ID arrays in "prompt_token_ids" (default false = text in "prompt").
+                          Use true for direct-to-vLLM; leave false (default) when routing via gateway.
 ```
+
+When `--engine-selector` is set it takes precedence over `--engines`. Pods matching the selector are automatically registered when they become Ready and removed when deleted or NotReady.
+
+When `--router-url` is set, `/v1/generate` requests are forwarded to the gateway for prefix-cache-aware, session-affinity routing. When unset, requests are dispatched directly to the first ready engine from the pool.
 
 ## Development
 

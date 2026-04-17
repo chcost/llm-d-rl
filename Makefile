@@ -12,15 +12,15 @@ all: build
 ##@ Build
 
 .PHONY: build
-build: build-rollout-controller build-weight-sync-proxy ## Build all binaries
-
-.PHONY: build-rollout-controller
-build-rollout-controller: ## Build the rollout controller
+build: ## Build the rollout controller (no k8s discovery)
 	go build -ldflags "$(LDFLAGS)" -o bin/rollout-controller ./cmd/rollout-controller
 
-.PHONY: build-weight-sync-proxy
-build-weight-sync-proxy: ## Build the weight sync proxy
-	go build -ldflags "$(LDFLAGS)" -o bin/weight-sync-proxy ./cmd/weight-sync-proxy
+.PHONY: build-k8s
+build-k8s: ## Build the rollout controller with Kubernetes pod discovery
+	go build -tags k8s -ldflags "$(LDFLAGS)" -o bin/rollout-controller-k8s ./cmd/rollout-controller
+
+.PHONY: build-all
+build-all: build build-k8s ## Build both variants
 
 ##@ Development
 
@@ -49,6 +49,17 @@ docker-build: ## Build container image
 .PHONY: docker-push
 docker-push: ## Push container image
 	docker push $(IMAGE):$(VERSION)
+
+##@ Deploy
+
+CONFIGMAP_OUT ?= deploy/cks/nccl-trainer-configmap.yaml
+
+.PHONY: generate-configmaps
+generate-configmaps: ## Generate ConfigMap YAML from python/nccl_weight_trainer.py (requires kubectl)
+	kubectl create configmap nccl-trainer-script \
+		--from-file=nccl_weight_trainer.py=python/nccl_weight_trainer.py \
+		--namespace=llm-d-rl \
+		--dry-run=client -o yaml > $(CONFIGMAP_OUT)
 
 ##@ Help
 

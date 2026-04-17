@@ -1,16 +1,33 @@
 // Command rollout-controller starts the llm-d RL rollout controller.
 //
-// The rollout controller exposes an HTTP/gRPC API that RL training frameworks
-// call to manage inference engine pools for generation rollouts. It orchestrates
-// weight synchronization, engine lifecycle, and request routing through the
-// llm-d inference scheduler.
+// The rollout controller exposes an HTTP API that RL training frameworks call
+// to manage inference engine pools for generation rollouts. It orchestrates
+// weight synchronization, engine lifecycle, and request routing.
 //
-// Usage:
+// Pool types (select via --router-url):
+//
+//	RouterPool (--router-url set): generation requests go through the inference
+//	  router gateway (EPP/Envoy). Engine pods are still discovered for weight sync.
+//
+//	DirectPool (no --router-url): generation requests are dispatched directly to
+//	  a ready engine picked from the pool.
+//
+// Pool population (select via --engine-selector or --engines):
+//
+//	K8s discovery (--engine-selector): pods matching the label selector are
+//	  added/removed automatically as they become Ready or are deleted.
+//
+//	Static list (--engines): a fixed comma-separated list of engine URLs.
+//
+// Usage (llm-d inference stack):
 //
 //	rollout-controller \
-//	  --port=8090 \
-//	  --engines=http://localhost:8000 \
-//	  --simulate-lifecycle
+//	  --engine-selector llm-d.ai/inference-serving=true \
+//	  --router-url http://llm-d-inference-gateway-istio.llm-d-rl.svc.cluster.local:80
+//
+// Usage (local/GPU-free demo):
+//
+//	rollout-controller --engines http://localhost:8000 --simulate-lifecycle
 package main
 
 import (
@@ -25,7 +42,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/llm-d/llm-d-rl/pkg/lifecycle"
+	"github.com/llm-d/llm-d-rl/pkg/pool"
 	"github.com/llm-d/llm-d-rl/pkg/rollout"
 	"github.com/llm-d/llm-d-rl/pkg/weightsync"
 )
@@ -36,10 +53,21 @@ func main() {
 	var (
 		port                = flag.Int("port", 8090, "HTTP server port")
 		healthCheckInterval = flag.Duration("health-check-interval", 30*time.Second, "Interval between engine health checks")
-		engines             = flag.String("engines", "", "Comma-separated list of engine URLs (e.g., http://localhost:8000,http://localhost:8001)")
-		simulateLifecycle   = flag.Bool("simulate-lifecycle", false, "No-op lifecycle operations (pause, sleep, weight sync) for GPU-free demos with llm-d-inference-sim")
+		simulateLifecycle   = flag.Bool("simulate-lifecycle", false, "No-op lifecycle operations for GPU-free demos")
 		showVersion         = flag.Bool("version", false, "Print version and exit")
+
+		// Pool population flags.
+		engines = flag.String("engines", "", "Comma-separated static engine URLs (e.g., http://localhost:8000). Used when --engine-selector is not set.")
+
+		// Pool type flags.
+		routerURL = flag.String("router-url", "", "HTTP URL of the inference router/EPP gateway. When set, generation requests go through this URL. When empty, requests go directly to a ready engine.")
+		tokensIn  = flag.Bool("tokens-in", false, "Pass token-ID arrays as prompt input. Default (false) sends text strings, required when routing via EPP/gateway.")
 	)
+
+	// Kubernetes discovery flags are registered only when built with -tags k8s.
+	discoveryCfg := newDiscoveryConfig()
+	bindDiscoveryFlags(discoveryCfg, flag.CommandLine)
+
 	flag.Parse()
 
 	if *showVersion {
@@ -49,74 +77,88 @@ func main() {
 
 	log.Printf("llm-d rollout controller %s starting on port %d", version, *port)
 
-	// Initialize components
-	coordinator := weightsync.NewCoordinator()
+	// --- Build engine client factory ---
+	newClient := func(address string) weightsync.EngineClient {
+		if *simulateLifecycle {
+			return weightsync.NewSimulatedEngineClient(address)
+		}
+		return weightsync.NewVLLMClient(address)
+	}
 
-	poolManager := lifecycle.NewPoolManager(lifecycle.PoolManagerConfig{
-		HealthCheckInterval: *healthCheckInterval,
-		OnEngineUnhealthy: func(id string, err error) {
-			log.Printf("WARNING: engine %s is unhealthy: %v", id, err)
+	// --- Create pool ---
+	p := pool.NewEnginePool(pool.Config{
+		BaseConfig: pool.BaseConfig{
+			ClientFactory:       newClient,
+			HealthCheckInterval: *healthCheckInterval,
+			OnEngineUnhealthy: func(id string, err error) {
+				log.Printf("WARNING: engine %s is unhealthy: %v", id, err)
+			},
 		},
+		RouterURL: *routerURL,
+		TokensIn:  *tokensIn,
 	})
+	log.Printf("pool: router-url=%q tokens-in=%v", *routerURL, *tokensIn)
 
-	// Register engines from --engines flag
-	if *engines != "" {
-		for i, rawURL := range strings.Split(*engines, ",") {
-			url := strings.TrimSpace(rawURL)
+	// --- Create and start populator ---
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if discoveryEnabled(discoveryCfg) {
+		// Kubernetes pod-selector discovery.
+		k8sPop := &dynamicDiscoveryAdaptor{cfg: discoveryCfg}
+		if err := k8sPop.Start(ctx, p); err != nil {
+			log.Fatalf("engine discovery: %v", err)
+		}
+	} else if *engines != "" {
+		// Static engine list.
+		for i, raw := range strings.Split(*engines, ",") {
+			url := strings.TrimSpace(raw)
 			if url == "" {
 				continue
 			}
-			id := fmt.Sprintf("engine-%d", i)
-
-			var client weightsync.EngineClient
-			if *simulateLifecycle {
-				client = weightsync.NewSimulatedEngineClient(url)
-				log.Printf("Registered engine %s at %s (simulated lifecycle)", id, url)
-			} else {
-				client = weightsync.NewVLLMClient(url)
-				log.Printf("Registered engine %s at %s", id, url)
-			}
-
-			poolManager.AddEngine(lifecycle.EngineInfo{
-				ID:      id,
-				Address: url,
-				Client:  client,
-			})
-			coordinator.RegisterEngine(id, client)
+			p.AddEngine(fmt.Sprintf("engine-%d", i), url)
 		}
+	} else {
+		log.Printf("WARNING: no engine source configured — set --engine-selector or --engines")
 	}
 
-	server := rollout.NewServer(poolManager, coordinator)
+	// --- Start health loop and server ---
+	go p.StartHealthLoop(ctx)
 
-	// Start health check loop
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go poolManager.StartHealthLoop(ctx)
-
-	// Run an initial health check so engines are marked ready before
-	// the first request arrives.
-	poolManager.RunHealthChecks(ctx)
-
-	// Start HTTP server
+	server := rollout.NewServer(p)
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *port),
 		Handler: server.Handler(),
 	}
 
-	// Graceful shutdown
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
-		log.Println("Shutting down...")
+		log.Println("shutting down...")
 		cancel()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		httpServer.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("Rollout controller listening on :%d", *port)
+	log.Printf("rollout controller listening on :%d", *port)
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("HTTP server error: %v", err)
 	}
 }
+
+// dynamicDiscoveryAdaptor bridges the build-tag-gated startDiscovery function
+// to the pool. The actual discovery logic lives in discovery_k8s.go (built with
+// -tags k8s) or discovery_nok8s.go (stub).
+type dynamicDiscoveryAdaptor struct {
+	cfg *discoveryConfig
+}
+
+func (k *dynamicDiscoveryAdaptor) Start(ctx context.Context, p pool.Pool) error {
+	return startDiscovery(ctx, k.cfg, engineCallbacks{
+		OnReady: func(id, address string) { p.AddEngine(id, address) },
+		OnGone:  func(id string) { p.RemoveEngine(id) },
+	})
+}
+

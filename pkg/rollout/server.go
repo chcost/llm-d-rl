@@ -13,27 +13,22 @@ import (
 	"sync"
 
 	"github.com/llm-d/llm-d-rl/api/v1alpha1"
-	"github.com/llm-d/llm-d-rl/pkg/lifecycle"
-	"github.com/llm-d/llm-d-rl/pkg/weightsync"
+	"github.com/llm-d/llm-d-rl/pkg/pool"
 )
 
 // Server is the rollout controller HTTP server.
 // It exposes the RolloutControl API surface for RL training frameworks.
 type Server struct {
-	pool        *lifecycle.PoolManager
-	coordinator *weightsync.Coordinator
+	pool pool.Pool
 
-	mu            sync.RWMutex
-	weightVersion int64
-	modelName     string // cached model name from engine
+	mu              sync.RWMutex
+	weightVersion   int64
+	cachedModelName string // lazily populated on first /v1/models query
 }
 
-// NewServer creates a new rollout controller server.
-func NewServer(pool *lifecycle.PoolManager, coordinator *weightsync.Coordinator) *Server {
-	return &Server{
-		pool:        pool,
-		coordinator: coordinator,
-	}
+// NewServer creates a new rollout controller server backed by the given pool.
+func NewServer(p pool.Pool) *Server {
+	return &Server{pool: p}
 }
 
 // Handler returns an http.Handler with all rollout API routes registered.
@@ -69,40 +64,43 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pick a ready engine from the pool.
-	// TODO: Replace with EPP routing for KV-cache-aware dispatch.
-	engine, err := s.pool.PickReadyEngine()
+	endpoint, engineID, err := s.pool.PickEngine()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("no engines available: %v", err), http.StatusServiceUnavailable)
+		http.Error(w, fmt.Sprintf("no endpoint available: %v", err), http.StatusServiceUnavailable)
 		return
 	}
 
-	// Translate to OpenAI completions format and forward.
-	resp, err := s.forwardToEngine(r.Context(), engine, &req)
+	headers := map[string]string{}
+	if req.SessionID != "" {
+		headers["X-Session-ID"] = req.SessionID
+	}
+
+	resp, err := s.postCompletions(r.Context(), endpoint, &req, headers, s.pool.TokensIn())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("generate: %v", err), http.StatusBadGateway)
 		return
 	}
 
+	resp.EngineID = engineID // empty in EPP mode; set in direct-dispatch mode
 	s.mu.RLock()
 	resp.WeightVersion = s.weightVersion
 	s.mu.RUnlock()
-	resp.EngineID = engine.ID
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// discoverModelName queries the engine's /v1/models endpoint to get the served model name.
-func (s *Server) discoverModelName(ctx context.Context, engine *lifecycle.EngineInfo) string {
+// discoverModelName queries baseURL/v1/models the first time it is called and
+// caches the result. Falls back to "default" if the endpoint is unreachable.
+func (s *Server) discoverModelName(ctx context.Context, baseURL string) string {
 	s.mu.RLock()
-	name := s.modelName
+	name := s.cachedModelName
 	s.mu.RUnlock()
 	if name != "" {
 		return name
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, engine.Address+"/v1/models", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
 	if err != nil {
 		return "default"
 	}
@@ -121,18 +119,23 @@ func (s *Server) discoverModelName(ctx context.Context, engine *lifecycle.Engine
 	}
 
 	s.mu.Lock()
-	s.modelName = models.Data[0].ID
+	s.cachedModelName = models.Data[0].ID
 	s.mu.Unlock()
 	return models.Data[0].ID
 }
 
-// forwardToEngine translates a GenerateRequest to OpenAI /v1/completions
-// format, forwards it to the engine, and translates the response back.
-func (s *Server) forwardToEngine(ctx context.Context, engine *lifecycle.EngineInfo, req *v1alpha1.GenerateRequest) (*v1alpha1.GenerateResponse, error) {
-	// Build OpenAI completions request.
+// buildOAIRequest constructs the OpenAI /v1/completions JSON body.
+//
+// When tokensIn is true, token IDs are sent in "prompt_token_ids".
+// When tokensIn is false, the text prompt is sent in "prompt".
+func (s *Server) buildOAIRequest(ctx context.Context, baseURL string, req *v1alpha1.GenerateRequest, tokensIn bool) ([]byte, error) {
 	oaiReq := map[string]interface{}{
-		"model":  s.discoverModelName(ctx, engine),
-		"prompt": req.PromptTokenIDs,
+		"model": s.discoverModelName(ctx, baseURL),
+	}
+	if tokensIn {
+		oaiReq["prompt_token_ids"] = req.PromptTokenIDs
+	} else {
+		oaiReq["prompt"] = req.Prompt
 	}
 	if req.SamplingParams != nil {
 		sp := req.SamplingParams
@@ -155,22 +158,63 @@ func (s *Server) forwardToEngine(ctx context.Context, engine *lifecycle.EngineIn
 	if req.ReturnLogprobs {
 		oaiReq["logprobs"] = 1
 	}
+	return json.Marshal(oaiReq)
+}
 
-	body, err := json.Marshal(oaiReq)
+// parseOAIResponse parses an OpenAI /v1/completions response body.
+// It always extracts output token IDs from the "token_ids" field.
+func parseOAIResponse(respBody []byte) (*v1alpha1.GenerateResponse, error) {
+	var oaiResp struct {
+		Choices []struct {
+			Text         string  `json:"text"`
+			TokenIDs     []int32 `json:"token_ids"`
+			FinishReason string  `json:"finish_reason"`
+			Logprobs     *struct {
+				TokenLogprobs []float32 `json:"token_logprobs"`
+			} `json:"logprobs"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &oaiResp); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	resp := &v1alpha1.GenerateResponse{
+		OutputTokenIDs: []int32{}, // always an array, never null
+	}
+	if len(oaiResp.Choices) > 0 {
+		choice := oaiResp.Choices[0]
+		resp.FinishReason = choice.FinishReason
+		if choice.TokenIDs != nil {
+			resp.OutputTokenIDs = choice.TokenIDs
+		}
+		resp.Text = choice.Text
+		if choice.Logprobs != nil {
+			resp.Logprobs = choice.Logprobs.TokenLogprobs
+		}
+	}
+	return resp, nil
+}
+
+// postCompletions builds the OAI request body, POSTs to baseURL/v1/completions,
+// applies any caller-supplied extra headers, and parses the response.
+func (s *Server) postCompletions(ctx context.Context, baseURL string, req *v1alpha1.GenerateRequest, extraHeaders map[string]string, tokensIn bool) (*v1alpha1.GenerateResponse, error) {
+	body, err := s.buildOAIRequest(ctx, baseURL, req, tokensIn)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		engine.Address+"/v1/completions", bytes.NewReader(body))
+		baseURL+"/v1/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	for k, v := range extraHeaders {
+		httpReq.Header.Set(k, v)
+	}
 
 	httpResp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("POST /v1/completions: %w", err)
+		return nil, fmt.Errorf("POST %s/v1/completions: %w", baseURL, err)
 	}
 	defer httpResp.Body.Close()
 
@@ -178,40 +222,10 @@ func (s *Server) forwardToEngine(ctx context.Context, engine *lifecycle.EngineIn
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-
 	if httpResp.StatusCode >= 400 {
-		return nil, fmt.Errorf("engine returned %d: %s", httpResp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("POST %s/v1/completions returned %d: %s", baseURL, httpResp.StatusCode, string(respBody))
 	}
-
-	// Parse OpenAI completions response.
-	var oaiResp struct {
-		Choices []struct {
-			Text         string `json:"text"`
-			FinishReason string `json:"finish_reason"`
-			Logprobs     *struct {
-				TokenLogprobs []float32 `json:"token_logprobs"`
-				Tokens        []string  `json:"tokens"`
-			} `json:"logprobs"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(respBody, &oaiResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	resp := &v1alpha1.GenerateResponse{}
-	if len(oaiResp.Choices) > 0 {
-		choice := oaiResp.Choices[0]
-		resp.FinishReason = choice.FinishReason
-		// Convert output text to token IDs (simple byte-level fallback).
-		for _, c := range choice.Text {
-			resp.OutputTokenIDs = append(resp.OutputTokenIDs, int32(c))
-		}
-		if choice.Logprobs != nil {
-			resp.Logprobs = choice.Logprobs.TokenLogprobs
-		}
-	}
-
-	return resp, nil
+	return parseOAIResponse(respBody)
 }
 
 func (s *Server) handleAbortGeneration(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +240,7 @@ func (s *Server) handleInitWeightTransfer(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := s.coordinator.InitTransfer(r.Context(), &init); err != nil {
+	if err := s.pool.InitWeightTransfer(r.Context(), &init); err != nil {
 		http.Error(w, fmt.Sprintf("init weight transfer: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -245,7 +259,7 @@ func (s *Server) handleUpdateWeights(w http.ResponseWriter, r *http.Request) {
 	s.pool.SetPhase(v1alpha1.PoolPhaseSyncing)
 	defer s.pool.SetPhase(v1alpha1.PoolPhaseServing)
 
-	if err := s.coordinator.UpdateWeights(r.Context(), &req); err != nil {
+	if err := s.pool.UpdateWeights(r.Context(), &req); err != nil {
 		http.Error(w, fmt.Sprintf("update weights: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -278,7 +292,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.coordinator.PauseAll(r.Context(), req.Mode); err != nil {
+	if err := s.pool.PauseAll(r.Context(), req.Mode); err != nil {
 		http.Error(w, fmt.Sprintf("pause: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -288,7 +302,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
-	if err := s.coordinator.ResumeAll(r.Context()); err != nil {
+	if err := s.pool.ResumeAll(r.Context()); err != nil {
 		http.Error(w, fmt.Sprintf("resume: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -306,7 +320,7 @@ func (s *Server) handleSleep(w http.ResponseWriter, r *http.Request) {
 
 	s.pool.SetPhase(v1alpha1.PoolPhaseSleeping)
 
-	if err := s.coordinator.SleepAll(r.Context(), v1alpha1.SleepLevel(req.Level)); err != nil {
+	if err := s.pool.SleepAll(r.Context(), v1alpha1.SleepLevel(req.Level)); err != nil {
 		http.Error(w, fmt.Sprintf("sleep: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -322,7 +336,7 @@ func (s *Server) handleWakeUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.coordinator.WakeUpAll(r.Context(), req.Tags); err != nil {
+	if err := s.pool.WakeUpAll(r.Context(), req.Tags); err != nil {
 		http.Error(w, fmt.Sprintf("wake up: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -335,7 +349,7 @@ func (s *Server) handleWakeUp(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePoolStatus(w http.ResponseWriter, r *http.Request) {
 	status := s.pool.Status()
-	status.WeightVersion = s.coordinator.WeightVersion()
+	status.WeightVersion = s.pool.WeightVersion()
 	json.NewEncoder(w).Encode(status)
 }
 
