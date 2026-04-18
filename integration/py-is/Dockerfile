@@ -2,6 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# git is required by pip to install from a GitHub URL.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install py-inference-scheduler (scheduling package only — no Ray required)
 # and the server dependencies.
 RUN pip install --no-cache-dir \
