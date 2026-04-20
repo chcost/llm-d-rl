@@ -52,7 +52,8 @@ prefix-cache-aware routing for multi-turn workloads where prompt prefixes repeat
 
 ### py-inference-scheduler
 
-Load-aware routing using queue depth and KV cache utilization, implemented as a
+[py-inference-scheduler](https://github.com/llm-d-incubation/py-inference-scheduler) —
+load-aware routing using queue depth and KV cache utilization, implemented as a
 lightweight Python proxy. No Kubernetes infrastructure dependencies beyond a
 standard cluster.
 
