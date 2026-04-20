@@ -91,16 +91,9 @@ Key flags used by `rollout-controller-router-llmd.yaml`:
 
 ### 6. Run a trainer job
 
-For the llm-d inference router path (text prompts for prefix-cache routing):
 ```bash
 kubectl apply -f deploy/cks/trainer-job-textinput.yaml
 kubectl -n llm-d-rl logs -f job/nccl-trainer-text
-```
-
-For direct engine dispatch (token IDs, no router):
-```bash
-kubectl apply -f deploy/cks/trainer-job.yaml
-kubectl -n llm-d-rl logs -f job/nccl-trainer
 ```
 
 ## Verify
@@ -240,5 +233,4 @@ make fmt     # gofmt
 | `deploy/cks/gateway.yaml` | InferencePool + Gateway + HTTPRoute |
 | `deploy/cks/llmd-vllm-engine.yaml` | vLLM with llm-d.ai labels + dev mode |
 | `deploy/cks/rollout-controller-router-llmd.yaml` | Rollout controller with router routing |
-| `deploy/cks/trainer-job-textinput.yaml` | NCCL weight trainer (text prompts, router path) |
-| `deploy/cks/trainer-job.yaml` | NCCL weight trainer (token IDs, direct dispatch) |
+| `deploy/cks/trainer-job-textinput.yaml` | NCCL weight trainer (text prompts from `python/prompts.txt`) |
