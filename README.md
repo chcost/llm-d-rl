@@ -165,11 +165,12 @@ kubectl apply -f deploy/cks/rollout-controller.yaml
 kubectl -n llm-d-rl wait --for=condition=ready pod -l app=rollout-controller --timeout=120s
 
 # 5. Run the NCCL weight trainer
-# Token IDs — direct dispatch (no router):
+# Direct dispatch — uses hardcoded default text prompts (DEFAULT_PROMPTS in nccl_weight_trainer.py).
+# The rollout controller sends them as dummy token IDs (--tokens-in=true) directly to vLLM.
 kubectl apply -f deploy/cks/trainer-job.yaml
 kubectl -n llm-d-rl logs -f job/nccl-trainer
 
-# Text prompts — router path (requires llm-d inference stack, see README-llmd.md):
+# Router path — loads text prompts from python/prompts.txt (requires llm-d inference stack or py-is, see README-llmd.md / README-py-is.md):
 kubectl apply -f deploy/cks/trainer-job-textinput.yaml
 kubectl -n llm-d-rl logs -f job/nccl-trainer-text
 ```

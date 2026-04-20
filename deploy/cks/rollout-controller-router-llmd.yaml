@@ -1,9 +1,12 @@
-# Rollout controller for use with the llm-d inference stack (router + gateway).
+# Rollout controller — llm-d router mode (EPP + Envoy Gateway).
+#
+# Routes generation requests through the llm-d inference stack for
+# prefix-cache-aware, load-aware routing. See README-llmd.md.
 #
 # Differences from rollout-controller.yaml:
-#   - --engine-selector uses llm-d.ai/inference-serving=true
-#   - --router-url routes generation requests through the inference router gateway
-#   - namespace: llm-d-rl
+#   - --engine-selector: llm-d-rl.io/role=rollout-engine (weight sync pod discovery)
+#   - --router-url: Envoy gateway fronting the EPP inference router
+#   - --tokens-in=false: text prompts required by EPP for prefix-cache tokenization
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -69,10 +72,11 @@ spec:
           image: quay.io/ezrasilvera/myrepo/llm-d-rl:latest
           args:
             - "--port=8090"
-            - "--engine-selector=llm-d.ai/inference-serving=true"
+            - "--engine-selector=llm-d-rl.io/role=rollout-engine"
             - "--engine-port=8000"
             - "--namespace=llm-d-rl"
             - "--router-url=http://llm-d-inference-gateway-istio.llm-d-rl.svc.cluster.local:80"
+            - "--tokens-in=false"
             - "--health-check-interval=15s"
           ports:
             - containerPort: 8090
