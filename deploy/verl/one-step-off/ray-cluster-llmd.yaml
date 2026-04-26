@@ -11,18 +11,21 @@ spec:
       num-cpus: "4"
     template:
       spec:
-        affinity: # For node selecting
-            nodeAffinity:
-              requiredDuringSchedulingIgnoredDuringExecution:
-                nodeSelectorTerms:
-                - matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values:
-                    - pokprod-b93r38s3 # restrict to specific node(s) b93r38s3
+        # For NCCL weight sync and low-latency rollout, it is best to run Ray (head +
+        # workers), the llm-d rollout controller, and vLLM engines on the same node(s).
+        # Uncomment affinity below to pin scheduling when you want that.
+        # affinity:
+        #   nodeAffinity:
+        #     requiredDuringSchedulingIgnoredDuringExecution:
+        #       nodeSelectorTerms:
+        #       - matchExpressions:
+        #         - key: kubernetes.io/hostname
+        #           operator: In
+        #           values:
+        #           - your-node-hostname
         containers:
         - name: ray-head
-          image: ghcr.io/naomieisen/verl:vllm-v17-2
+          image: ghcr.io/naomieisen/verl:vllm-v17
           imagePullPolicy: Always
           lifecycle:
             postStart:
@@ -131,18 +134,19 @@ spec:
       num-cpus: "32"   # limit Ray's visible CPUs to reduce internal thread spawning
     template:
       spec:
-        affinity: # For node selecting
-          nodeAffinity:
-            requiredDuringSchedulingIgnoredDuringExecution:
-              nodeSelectorTerms:
-              - matchExpressions:
-                - key: kubernetes.io/hostname
-                  operator: In
-                  values:
-                  - pokprod-b93r38s3 # restrict to specific node(s) b93r38s3
+        # Same as head: prefer same-node placement for trainer NCCL ↔ vLLM.
+        # affinity:
+        #   nodeAffinity:
+        #     requiredDuringSchedulingIgnoredDuringExecution:
+        #       nodeSelectorTerms:
+        #       - matchExpressions:
+        #         - key: kubernetes.io/hostname
+        #           operator: In
+        #           values:
+        #           - your-node-hostname
         containers:
         - name: ray-worker
-          image: ghcr.io/naomieisen/verl:vllm-v17-2
+          image: ghcr.io/naomieisen/verl:vllm-v17
           imagePullPolicy: Always
           lifecycle:
             postStart:
