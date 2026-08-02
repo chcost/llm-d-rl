@@ -1,0 +1,236 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: slime-cluster
+  namespace: ${NAMESPACE}
+spec:
+  rayVersion: '2.56.1'
+
+  # Single-pod layout: head owns all GPUs. Avoids the two-pod split where
+  # the head has no GPU and cannot run convert_hf_to_torch_dist.py to produce
+  # the Megatron torch_dist checkpoint required by --ref-load.
+
+  headGroupSpec:
+    rayStartParams:
+      num-cpus: "16"
+      num-gpus: "6"
+    template:
+      spec:
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                # Exclude known-faulty nodes. Add hostnames as needed.
+                - key: kubernetes.io/hostname
+                  operator: NotIn
+                  values:
+                  - excluded-node
+
+        # EPP and Envoy are not in the slime image. The fetch-binaries init
+        # container pulls them from their separate (public) images using crane
+        # and extracts the binaries into the llm-d-bins emptyDir volume.
+        # Bump IMG_EPP / IMG_ENVOY in deploy.env to change versions without
+        # rebuilding the slime image.
+        initContainers:
+        - name: fetch-binaries
+          image: ${IMG_CRANE}
+          command: ["/busybox/sh", "-c"]
+          args:
+          - |
+            set -e
+            /ko-app/crane export --platform linux/amd64 "$EPP_IMAGE"   - | /busybox/tar -xOf - app/epp             > /opt/llm-d-bins/epp
+            /ko-app/crane export --platform linux/amd64 "$ENVOY_IMAGE" - | /busybox/tar -xOf - usr/local/bin/envoy > /opt/llm-d-bins/envoy
+            chmod +x /opt/llm-d-bins/epp /opt/llm-d-bins/envoy
+          env:
+          - name: EPP_IMAGE
+            value: "${IMG_EPP}"
+          - name: ENVOY_IMAGE
+            value: "${IMG_ENVOY}"
+          volumeMounts:
+          - mountPath: /opt/llm-d-bins
+            name: llm-d-bins
+
+        containers:
+        - name: ray-head
+          image: ${IMG_SLIME}   # slimerl/slime:<version> — see deploy.env
+          imagePullPolicy: Always
+          workingDir: /tmp   # Ray multiprocessing.spawn restores cwd; /root may be permission-denied
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                - /bin/bash
+                - -c
+                - |
+                  exec > /tmp/setup_log.txt 2>&1
+                  set -euxo pipefail
+                  echo "=== slime setup ==="
+
+                  # --- Clone slime source to /tmp (accessible under non-root UID) ---
+                  # The image installs slime as an editable package at /root/slime,
+                  # but /root is drwx------ and inaccessible on this cluster.
+                  # Cloning here gives the job a readable copy of train.py + the package.
+                  if [ ! -d /tmp/slime-src/.git ]; then
+                    git clone --depth=1 https://github.com/THUDM/slime.git /tmp/slime-src
+                  fi
+                  echo "slime source at /tmp/slime-src"
+
+                  # Megatron-LM is installed as an editable package pointing at /root/Megatron-LM,
+                  # which is unreadable under a non-root UID. Clone to /tmp and use the pyfix
+                  # sitecustomize.py to silence PermissionError from the broken editable finder.
+                  git clone --depth=1 -b core_v0.16.0 https://github.com/NVIDIA/Megatron-LM.git /tmp/Megatron-LM
+                  mkdir -p /tmp/pyfix
+                  printf 'import sys\nclass _S:\n def __init__(self,f):self._f=f\n def find_spec(self,*a,**k):\n  try:return self._f.find_spec(*a,**k)\n  except(PermissionError,OSError):return None\nsys.meta_path[:]=[_S(f) if "editable" in getattr(type(f),"__module__","") else f for f in sys.meta_path]\n' > /tmp/pyfix/sitecustomize.py
+
+                  # Pre-create empty endpoints file so EPP's watchFile doesn't crash
+                  # on a missing file before the shim writes its first update.
+                  printf 'endpoints: []\n' > /tmp/epp-endpoints.yaml
+
+                  # --- Start EPP (background) ---
+                  nohup /opt/llm-d-bins/epp \
+                    --config-file /etc/llmd-configs/epp-config.yaml \
+                    --pool-name file-discovery \
+                    --pool-namespace default \
+                    --grpc-port 9002 \
+                    --grpc-health-port 9003 \
+                    --metrics-port 9090 \
+                    --secure-serving=false \
+                    --tracing=false \
+                    --allow-experimental-plugins \
+                    -v="${SLIME_EPP_VERBOSITY:-1}" \
+                    > /tmp/epp.log 2>&1 &
+                  echo "EPP started (pid $!)"
+
+                  # --- Start Envoy (background) ---
+                  nohup /opt/llm-d-bins/envoy \
+                    -c /etc/llmd-configs/envoy.yaml \
+                    --log-level "${SLIME_ENVOY_LOG_LEVEL:-info}" \
+                    > /tmp/envoy.log 2>&1 &
+                  echo "Envoy started (pid $!)"
+
+                  # --- Start the router shim (background) ---
+                  if [ -f /etc/llmd-configs/router_shim.py ]; then
+                    SHIM_PATH=/etc/llmd-configs/router_shim.py
+                  else
+                    git clone --depth=1 https://github.com/llm-d-incubation/llm-d-rl.git /tmp/llm-d-rl
+                    SHIM_PATH=/tmp/llm-d-rl/integrations/slime/shim/router_shim.py
+                  fi
+                  nohup python3 "$SHIM_PATH" \
+                    --host 127.0.0.1 \
+                    --port 3001 \
+                    --endpoints-file /tmp/epp-endpoints.yaml \
+                    > /tmp/shim.log 2>&1 &
+                  echo "Router shim started (pid $!)"
+
+                  # EPP/Envoy/shim are up. Model download, weight conversion, and
+                  # training are handled by run-qwen3-4B.sh (run manually from the pod).
+                  echo "Setup complete" > /tmp/slime_ready.txt
+                  echo "=== setup done ==="
+
+          env:
+          - name: HOME
+            value: "/tmp"
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: PYTHONPATH
+            value: "/tmp/pyfix:/tmp/slime-src:/tmp/Megatron-LM"
+
+          # --- HuggingFace cache ---
+          - name: HF_HOME
+            value: "/tmp/slime/hf_cache"
+          - name: HF_DATASETS_CACHE
+            value: "/tmp/slime/hf_cache/datasets"
+          - name: XDG_CACHE_HOME
+            value: "/tmp/slime/hf_cache"
+          - name: HUGGINGFACE_HUB_CACHE
+            value: "/tmp/slime/hf_cache"
+
+          # --- Compile / framework caches ---
+          - name: TRITON_CACHE_DIR
+            value: "/tmp/triton"
+          - name: FLASHINFER_WORKSPACE_DIR
+            value: "/tmp/flashinfer"
+          - name: TORCHINDUCTOR_CACHE_DIR
+            value: "/tmp/torch_inductor_cache"
+
+          # --- SGLang / NCCL ---
+          - name: TOKENIZERS_PARALLELISM
+            value: "false"
+          - name: OMP_NUM_THREADS
+            value: "1"
+          - name: RAY_max_grpc_threads
+            value: "32"
+          - name: NCCL_DEBUG
+            value: "INFO"
+
+          # CuMemAllocator (sglang sleep/wake) is incompatible with expandable_segments
+          - name: PYTORCH_CUDA_ALLOC_CONF
+            value: "expandable_segments:False"
+
+          # --- EPP / Envoy binary paths (written by fetch-binaries init container) ---
+          - name: SLIME_EPP_BINARY
+            value: "/opt/llm-d-bins/epp"
+          - name: SLIME_ENVOY_BINARY
+            value: "/opt/llm-d-bins/envoy"
+          - name: SLIME_ROUTER_PORT
+            value: "8081"
+
+          - name: WANDB_MODE
+            value: "offline"
+
+          # --- Debug logging (set to "1" / "info" to quiet down) ---
+          - name: SLIME_EPP_VERBOSITY
+            value: "4"
+          - name: SLIME_ENVOY_LOG_LEVEL
+            value: "debug"
+
+          resources:
+            limits:
+              cpu: "32"
+              memory: "256G"
+              nvidia.com/gpu: "6"
+            requests:
+              cpu: "16"
+              memory: "128G"
+              nvidia.com/gpu: "6"
+
+          ports:
+          - containerPort: 6379
+            name: gcs-server
+          - containerPort: 8265
+            name: dashboard
+          - containerPort: 10001
+            name: client
+          - containerPort: 8081
+            name: envoy
+
+          volumeMounts:
+          - mountPath: /opt/llm-d-bins
+            name: llm-d-bins
+          - mountPath: /dev/shm
+            name: dshm
+          - mountPath: /etc/llmd-configs
+            name: llmd-epp-configs
+            readOnly: true
+          - mountPath: /.cache
+            name: sglang-cache
+          - mountPath: /.triton
+            name: triton-cache
+
+        volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "64Gi"
+        - name: llmd-epp-configs
+          configMap:
+            name: llmd-epp-configs
+        - name: llm-d-bins
+          emptyDir: {}
+        - name: sglang-cache
+          emptyDir: {}
+        - name: triton-cache
+          emptyDir: {}
