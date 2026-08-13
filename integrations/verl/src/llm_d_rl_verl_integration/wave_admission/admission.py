@@ -125,6 +125,9 @@ class AdmissionLedger:
         p2p_port: int = 7777,
         migration_cost_ratio_p2p: float = 0.0,
         p2p_nosidecar: bool = False,
+        oracle_reserve: bool = False,
+        lpt_window_s: float = 0.0,
+        rebalance_slack: float = -1.0,
     ):
         self._replicas = list(replicas)
         self._budget = budget_tokens_per_replica
@@ -158,6 +161,32 @@ class AdmissionLedger:
         self._forced_admissions = 0
         self._migrations = 0
 
+        # Oracle reserve: charge the trace's true remaining tokens instead of the
+        # estimator's guess. Only meaningful for a replay (the size is known up
+        # front); it measures what perfect prediction would be worth.
+        self._oracle_reserve = oracle_reserve
+        self._oracle_final: dict[str, float] = {}
+
+        # Windowed LPT. Every session of a rollout batch calls acquire() within a
+        # few ms, so a short collection window sees essentially the whole batch;
+        # sorting it longest-work-first before placing is the classic ~4/3
+        # makespan heuristic, versus placing in arrival order (2-approx).
+        self._lpt_window_s = lpt_window_s
+        self._lpt_pending: list[tuple[float, str, float]] = []   # (-work, rid, context)
+        self._lpt_result: dict[str, str] = {}
+        self._lpt_event: "asyncio.Event | None" = None
+        self._lpt_closed = False
+        self._lpt_batches = 0
+
+        # Imbalance-driven migration. The shipped rule is FULLNESS-driven: a
+        # session moves only when its resident replica cannot fit the next turn,
+        # so it stays put while another replica sits far emptier. With
+        # rebalance_slack >= 0 a session also moves when some other replica has
+        # more than slack*budget additional free budget, targeting the straggler
+        # directly instead of waiting for a replica to fill up. Negative disables.
+        self._rebalance_slack = rebalance_slack
+        self._rebalances = 0
+
         logger.info(
             "[AdmissionLedger] %d replicas, budget=%.0f tok/replica, wave1_size=%d, "
             "allow_reactive_migration=%s, reserve_mode=%s, reserve_z=%.1f, migration_cost_ratio=%.1f, "
@@ -166,6 +195,18 @@ class AdmissionLedger:
             reserve_mode, reserve_z, migration_cost_ratio,
             p2p_kv_available, migration_cost_ratio_p2p, p2p_nosidecar, p2p_port,
         )
+
+    def _charge(self, request_id: str, context_size: float, turn_index: int) -> float:
+        """Reserve charge for a resident: predicted remaining growth.
+
+        Oracle mode substitutes the trace's true final context for the estimator,
+        which turns this into a measurement of what perfect prediction is worth.
+        """
+        if self._oracle_reserve:
+            final = self._oracle_final.get(request_id)
+            if final is not None:
+                return max(0.0, final - context_size)
+        return self._estimator.estimate(self._estimator.key(context_size, turn_index))
 
     def _reserve(self, replica: str) -> float:
         return sum(
@@ -190,9 +231,7 @@ class AdmissionLedger:
             self._used[replica] += context_size
         self._resident[request_id] = replica
         history[turn_index] = context_size
-        self._reserve_charge[request_id] = self._estimator.estimate(
-            self._estimator.key(context_size, turn_index)
-        )
+        self._reserve_charge[request_id] = self._charge(request_id, context_size, turn_index)
 
     def _release_booking(self, request_id: str, replica: str, turn_index: int) -> None:
         """Release the booking recorded for request_id at turn_index on
@@ -200,10 +239,30 @@ class AdmissionLedger:
         size = self._history.get(request_id, {}).get(turn_index, 0.0)
         self._used[replica] = max(0.0, self._used[replica] - size)
 
-    async def acquire(self, request_id: str, *, turn_index: int, context_size: float) -> dict:
-        """Pick a replica: {"replica": addr, "kv_source": addr-or-None}."""
+    async def acquire(
+        self,
+        request_id: str,
+        *,
+        turn_index: int,
+        context_size: float,
+        session_final: float | None = None,
+        session_work: float | None = None,
+    ) -> dict:
+        """Pick a replica: {"replica": addr, "kv_source": addr-or-None}.
+
+        session_final/session_work are trace-derived hints (final context size and
+        total prefill+decode work). Only the replay client sends them; every other
+        caller leaves them None and the estimator is used as before.
+        """
+        if session_final is not None:
+            self._oracle_final[request_id] = float(session_final)
         if turn_index > 0:
             return self._continue_or_migrate(request_id, turn_index, context_size)
+
+        if self._lpt_window_s > 0:
+            replica = await self._lpt_place(request_id, context_size, session_work)
+            self._book(request_id, replica, 0, context_size)
+            return {"replica": replica, "kv_source": None}
 
         self._admitted_count += 1
         if self._admitted_count <= self._wave1_size:
@@ -233,6 +292,50 @@ class AdmissionLedger:
         self._book(request_id, replica, 0, context_size)
         return {"replica": replica, "kv_source": None}
 
+    async def _lpt_place(self, request_id: str, context_size: float, session_work) -> str:
+        """Windowed longest-processing-time-first placement.
+
+        Collect turn-0 arrivals for lpt_window_s, then assign them largest-work
+        first, each to the replica with the most estimated free budget. Sessions
+        arriving after the window fall through to plain least-loaded so a late or
+        retried trajectory can never stall.
+        """
+        if self._lpt_closed:
+            return self._least_loaded()
+        work = float(session_work) if session_work else context_size
+        self._lpt_pending.append((-work, request_id, context_size))
+        first = self._lpt_event is None
+        if first:
+            self._lpt_event = asyncio.Event()
+        ev = self._lpt_event
+        if first:
+            await asyncio.sleep(self._lpt_window_s)
+            batch = sorted(self._lpt_pending)
+            self._lpt_pending = []
+            # Greedy LPT: largest first onto the emptiest replica, charging each
+            # assignment as we go so later items see the updated load.
+            provisional: dict[str, float] = {r: 0.0 for r in self._replicas}
+            for negw, rid, ctx in batch:
+                target = max(self._replicas, key=lambda r: self._estimated_free(r) - provisional[r])
+                provisional[target] += -negw
+                self._lpt_result[rid] = target
+            self._lpt_batches += 1
+            self._lpt_closed = True
+            logger.info(
+                "[AdmissionLedger] LPT batch %d: placed %d sessions in a %.2fs window "
+                "(work range %.0f..%.0f tokens)",
+                self._lpt_batches, len(batch), self._lpt_window_s,
+                -batch[-1][0] if batch else 0, -batch[0][0] if batch else 0,
+            )
+            ev.set()
+        else:
+            try:
+                await asyncio.wait_for(ev.wait(), timeout=self._lpt_window_s + 30.0)
+            except asyncio.TimeoutError:
+                logger.warning("[AdmissionLedger] LPT window timed out for %s - least_loaded", request_id)
+                return self._least_loaded()
+        return self._lpt_result.pop(request_id, None) or self._least_loaded()
+
     def _continue_or_migrate(self, request_id: str, turn_index: int, context_size: float) -> dict:
         resident = self._resident.get(request_id)
         if resident is None:
@@ -244,6 +347,21 @@ class AdmissionLedger:
 
         prev_size = self._history.get(request_id, {}).get(turn_index - 1, 0.0)
         incremental_need = max(0.0, context_size - prev_size)
+
+        if self._rebalance_slack >= 0.0 and self._allow_reactive_migration:
+            others = [g for g in self._replicas if g != resident]
+            cand = max(others, key=self._estimated_free, default=None)
+            if cand is not None:
+                gain = self._estimated_free(cand) - self._estimated_free(resident)
+                if gain > self._rebalance_slack * self._budget and self._estimated_free(cand) >= context_size:
+                    self._rebalances += 1
+                    self._release_booking(request_id, resident, turn_index - 1)
+                    self._book(request_id, cand, turn_index, context_size)
+                    kv_source = None
+                    if self._p2p_kv_available:
+                        kv_source = f"{p2p_listener_host(self._replicas.index(resident))}:{self._p2p_port}"
+                    return {"replica": cand, "kv_source": kv_source}
+
         if self._estimated_free(resident) >= incremental_need:
             self._book(request_id, resident, turn_index, context_size)
             return {"replica": resident, "kv_source": None}
@@ -296,9 +414,7 @@ class AdmissionLedger:
         if delta:
             self._used[replica] += delta
         history[turn_index] = context_size
-        self._reserve_charge[request_id] = self._estimator.estimate(
-            self._estimator.key(context_size, turn_index)
-        )
+        self._reserve_charge[request_id] = self._charge(request_id, context_size, turn_index)
 
     def on_trajectory_done(self, request_id: str) -> None:
         """Release bookings and feed the estimator with completed-turn growth."""
@@ -318,6 +434,7 @@ class AdmissionLedger:
             "used": dict(self._used),
             "estimated_free": {r: self._estimated_free(r) for r in self._replicas},
             "admitted": self._admitted_count,
+            "rebalances": self._rebalances,
             "delayed_polls": self._delayed_polls,
             "forced_admissions": self._forced_admissions,
             "migrations": self._migrations,

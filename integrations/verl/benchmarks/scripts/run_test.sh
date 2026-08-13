@@ -88,7 +88,9 @@ case "$MODE" in
     DEFAULT_NAME="qwen3_4b_grpo_epp_tp${TP}_n${N}_${STEPS}s"
     [[ -z "$REQLOG" ]] && REQLOG="on"
     AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager"
-    EPP_CONFIG_FILE="epp-config.yaml"
+    # EPP_CONFIG selects a scorer/producer variant from the llmd-epp-configs
+    # ConfigMap without touching the mode; default is the burst profile.
+    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config.yaml}"
     ;;
 
   epp-inflight)

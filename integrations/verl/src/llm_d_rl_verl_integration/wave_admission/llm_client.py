@@ -30,6 +30,10 @@ def _forced_output_len(sampling_params: dict[str, Any]) -> int:
 class WaveAdmissionLLMClient(LLMServerClient):
     """Asks the ledger for a replica, then dispatches to that server actor."""
 
+    # Tells trace_player it may pass session_final/session_work. Other clients
+    # leave this false, so the hints never reach verl's generate().
+    wants_session_hint = True
+
     def __init__(
         self,
         config,
@@ -79,6 +83,8 @@ class WaveAdmissionLLMClient(LLMServerClient):
 
         placement = await self._admission_ledger.acquire.remote(
             rid, turn_index=turn, context_size=context_size,
+            session_final=kwargs.pop("session_final", None),
+            session_work=kwargs.pop("session_work", None),
         )
         replica = placement["replica"]
         kv_source = placement.get("kv_source")

@@ -77,6 +77,25 @@ class TracePlayerAgentLoop(AgentLoopBase):
         # rollouts of one sample distinct so they pin independently.
         request_id = f"trace-{trace.conv_id}-{uuid4().hex[:8]}"
 
+        # Trace-derived size hints for admission. Capped exactly as the turn loop
+        # caps below, so the hint matches what will really be sent. Passed only
+        # when the manager asks for them: every other client forwards **kwargs to
+        # verl's generate(), which declares no **kwargs and would raise.
+        hint: dict[str, Any] = {}
+        if getattr(self.server_manager, "wants_session_hint", False) and trace.turns:
+            _last = trace.turns[-1]
+            hint = {
+                "session_final": float(
+                    min(_last.input_tokens, self.prompt_length)
+                    + min(_last.output_tokens, self.response_length)
+                ),
+                "session_work": float(sum(
+                    min(t.input_tokens, self.prompt_length)
+                    + min(t.output_tokens, self.response_length)
+                    for t in trace.turns
+                )),
+            }
+
         metrics: dict[str, Any] = {}
         last_prompt_ids: list[int] = [0]
         last_output: TokenOutput | None = None
@@ -101,6 +120,7 @@ class TracePlayerAgentLoop(AgentLoopBase):
                     request_id=request_id,
                     prompt_ids=prompt_ids,
                     sampling_params=sp,
+                    **hint,
                 )
                 last_prompt_ids = prompt_ids
                 num_turns += 1

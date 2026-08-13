@@ -77,6 +77,9 @@ class WaveAdmissionAgentLoopManager(LlmdBaseAgentLoopManager):
         p2p_port = int(_custom_get(custom, "wave_admission_p2p_port", DEFAULT_P2P_CONNECTOR_PORT))
         migration_cost_ratio_p2p = float(_custom_get(custom, "wave_admission_migration_cost_ratio_p2p", 0.0))
         p2p_nosidecar = bool(_custom_get(custom, "wave_admission_p2p_nosidecar", False))
+        oracle_reserve = bool(_custom_get(custom, "wave_admission_oracle_reserve", False))
+        lpt_window_s = float(_custom_get(custom, "wave_admission_lpt_window_s", 0.0))
+        rebalance_slack = float(_custom_get(custom, "wave_admission_rebalance_slack", -1.0))
         # Read by _create_llm_client() below, which has no access to `custom`.
         self._p2p_nosidecar = p2p_nosidecar
 
@@ -109,6 +112,9 @@ class WaveAdmissionAgentLoopManager(LlmdBaseAgentLoopManager):
             p2p_port=p2p_port,
             migration_cost_ratio_p2p=migration_cost_ratio_p2p,
             p2p_nosidecar=p2p_nosidecar,
+            oracle_reserve=oracle_reserve,
+            lpt_window_s=lpt_window_s,
+            rebalance_slack=rebalance_slack,
         )
 
     def _create_llm_client(self) -> LLMServerClient:

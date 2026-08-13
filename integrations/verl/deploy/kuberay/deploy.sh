@@ -96,6 +96,7 @@ create_configmap() {
   # are the configs for --mode epp-inflight / epp-fc (custom.epp_report_completion).
   kubectl create configmap llmd-epp-configs \
     --from-file=epp-config.yaml=../epp-config.yaml \
+    --from-file=epp-config-persistent.yaml=../epp-config-persistent.yaml \
     --from-file=epp-config-p2p.yaml=../epp-config-p2p.yaml \
     --from-file=epp-config-p2p-load.yaml=../epp-config-p2p-load.yaml \
     --from-file=envoy.yaml=../envoy.yaml \
