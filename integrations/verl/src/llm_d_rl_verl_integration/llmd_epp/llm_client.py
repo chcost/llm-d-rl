@@ -17,7 +17,7 @@ import ray
 from verl.workers.rollout.llm_server import LLMServerClient
 from verl.workers.rollout.replica import TokenOutput
 
-from llm_d_rl_common.reqlog import log_request, open_reqlog, phash
+from llm_d_rl_common.reqlog import log_request, open_reqlog, phash, tag_global_steps
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +131,10 @@ class EPPLLMClient(LLMServerClient):
                 video_data=video_data,
                 **extra_kwargs,
             )
+            # verl's _compute_metrics int()s min/max_global_steps on every tag, so a
+            # missing key becomes None and kills the run. The server sets only
+            # global_steps; a single-turn generate spans one weight version.
+            tag_global_steps(out)
             return out
         finally:
             t_end = time.monotonic()

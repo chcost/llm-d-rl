@@ -12,7 +12,7 @@ import ray
 from verl.workers.rollout.llm_server import LLMServerClient
 from verl.workers.rollout.replica import TokenOutput
 
-from llm_d_rl_common.reqlog import log_request, open_reqlog, phash
+from llm_d_rl_common.reqlog import log_request, open_reqlog, phash, tag_global_steps
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,9 @@ class WaveAdmissionLLMClient(LLMServerClient):
                 **multimodal_kwargs,
                 **kwargs,
             )
+            # verl's _compute_metrics int()s min/max_global_steps on every tag, so a
+            # missing key becomes None and kills the run after the first rollout.
+            tag_global_steps(out)
             return out
         finally:
             t_end = time.monotonic()

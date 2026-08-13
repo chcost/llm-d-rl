@@ -49,3 +49,19 @@ def log_request(f, rec: dict) -> None:
         f.write(json.dumps(rec) + "\n")
     except Exception:
         pass
+
+
+def tag_global_steps(out) -> None:
+    """Fill min/max_global_steps on a TokenOutput from its global_steps.
+
+    verl's trainer int()s both on every trajectory tag, so a client that leaves
+    them unset produces None and a TypeError that kills the run after the first
+    rollout. The server side records only global_steps; one generate() call is
+    served by one weight version, so min == max == that value.
+    """
+    fields = getattr(out, "extra_fields", None)
+    if not isinstance(fields, dict):
+        return
+    gs = fields.get("global_steps")
+    fields.setdefault("min_global_steps", gs)
+    fields.setdefault("max_global_steps", gs)
