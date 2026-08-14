@@ -89,6 +89,9 @@ class TracePlayerAgentLoop(AgentLoopBase):
                     min(_last.input_tokens, self.prompt_length)
                     + min(_last.output_tokens, self.response_length)
                 ),
+                # The n GRPO samples of one prompt share conv_id (request_id is
+                # trace-{conv_id}-{uuid8}), so it identifies the group.
+                "group_key": str(trace.conv_id),
                 "session_work": float(sum(
                     min(t.input_tokens, self.prompt_length)
                     + min(t.output_tokens, self.response_length)

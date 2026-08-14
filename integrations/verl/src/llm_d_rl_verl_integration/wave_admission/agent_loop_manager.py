@@ -80,6 +80,8 @@ class WaveAdmissionAgentLoopManager(LlmdBaseAgentLoopManager):
         oracle_reserve = bool(_custom_get(custom, "wave_admission_oracle_reserve", False))
         lpt_window_s = float(_custom_get(custom, "wave_admission_lpt_window_s", 0.0))
         rebalance_slack = float(_custom_get(custom, "wave_admission_rebalance_slack", -1.0))
+        stagger_groups = bool(_custom_get(custom, "wave_admission_stagger_groups", False))
+        stagger_timeout_s = float(_custom_get(custom, "wave_admission_stagger_timeout_s", 120.0))
         # Read by _create_llm_client() below, which has no access to `custom`.
         self._p2p_nosidecar = p2p_nosidecar
 
@@ -115,6 +117,8 @@ class WaveAdmissionAgentLoopManager(LlmdBaseAgentLoopManager):
             oracle_reserve=oracle_reserve,
             lpt_window_s=lpt_window_s,
             rebalance_slack=rebalance_slack,
+            stagger_groups=stagger_groups,
+            stagger_timeout_s=stagger_timeout_s,
         )
 
     def _create_llm_client(self) -> LLMServerClient:

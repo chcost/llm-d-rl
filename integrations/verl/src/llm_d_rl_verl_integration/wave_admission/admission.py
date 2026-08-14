@@ -128,6 +128,8 @@ class AdmissionLedger:
         oracle_reserve: bool = False,
         lpt_window_s: float = 0.0,
         rebalance_slack: float = -1.0,
+        stagger_groups: bool = False,
+        stagger_timeout_s: float = 120.0,
     ):
         self._replicas = list(replicas)
         self._budget = budget_tokens_per_replica
@@ -186,6 +188,26 @@ class AdmissionLedger:
         # directly instead of waiting for a replica to fill up. Negative disables.
         self._rebalance_slack = rebalance_slack
         self._rebalances = 0
+
+        # Staggered GRPO group dispatch. Measured problem: a group's n samples arrive
+        # in one burst and dispatch simultaneously, so when p2p-source-producer asks
+        # "which peer holds this prefix" the answer is nobody - no replica has
+        # computed it yet. Spreading the group therefore fixes the tail (straggler
+        # 30.8% -> 2.6%) but loses the reuse (gen_mean 8.52 -> 14.47, ext_hit 0.1%).
+        # Staggering makes the reuse available: sibling 1 is the leader and runs
+        # immediately; siblings 2..n wait for its turn-0 to land, then go to OTHER
+        # replicas with kv_source pointing at the leader, so they pull the prefix
+        # instead of recomputing it. Balance AND reuse, which neither placement
+        # achieves alone.
+        self._stagger_groups = stagger_groups
+        self._stagger_timeout_s = stagger_timeout_s
+        self._group_leader: dict[str, str] = {}        # group_key -> leader replica
+        self._group_ready: dict[str, "asyncio.Event"] = {}
+        self._group_claimed: set[str] = set()
+        self._group_leader_rid: dict[str, str] = {}     # leader request_id -> group_key
+        self._stagger_leaders = 0
+        self._stagger_followers = 0
+        self._stagger_timeouts = 0
 
         logger.info(
             "[AdmissionLedger] %d replicas, budget=%.0f tok/replica, wave1_size=%d, "
@@ -247,6 +269,7 @@ class AdmissionLedger:
         context_size: float,
         session_final: float | None = None,
         session_work: float | None = None,
+        group_key: str | None = None,
     ) -> dict:
         """Pick a replica: {"replica": addr, "kv_source": addr-or-None}.
 
@@ -258,6 +281,11 @@ class AdmissionLedger:
             self._oracle_final[request_id] = float(session_final)
         if turn_index > 0:
             return self._continue_or_migrate(request_id, turn_index, context_size)
+
+        if self._stagger_groups and group_key:
+            placement = await self._stagger_place(request_id, group_key, context_size)
+            if placement is not None:
+                return placement
 
         if self._lpt_window_s > 0:
             replica = await self._lpt_place(request_id, context_size, session_work)
@@ -291,6 +319,67 @@ class AdmissionLedger:
 
         self._book(request_id, replica, 0, context_size)
         return {"replica": replica, "kv_source": None}
+
+    async def _stagger_place(self, request_id: str, group_key: str, context_size: float):
+        """Turn-0 placement for one member of a GRPO group.
+
+        The first caller for a group_key becomes the leader and is placed normally.
+        Later callers wait for the leader's turn-0 to complete, then take a DIFFERENT
+        replica and carry kv_source=leader so they pull the shared prefix.
+        Returns None to fall through to normal placement if anything is unsafe.
+        """
+        if group_key not in self._group_claimed:
+            self._group_claimed.add(group_key)
+            self._group_ready[group_key] = asyncio.Event()
+            replica = self._least_loaded()
+            self._group_leader[group_key] = replica
+            self._group_leader_rid[request_id] = group_key
+            self._book(request_id, replica, 0, context_size)
+            self._stagger_leaders += 1
+            return {"replica": replica, "kv_source": None}
+
+        ev = self._group_ready.get(group_key)
+        if ev is not None and not ev.is_set():
+            try:
+                await asyncio.wait_for(ev.wait(), timeout=self._stagger_timeout_s)
+            except asyncio.TimeoutError:
+                # Never hang a rollout on a leader that died or stalled: fall through
+                # to ordinary placement and simply pay the re-prefill.
+                self._stagger_timeouts += 1
+                logger.warning(
+                    "[AdmissionLedger] stagger timeout for group %s after %.0fs - "
+                    "placing %s without a source", group_key, self._stagger_timeout_s, request_id,
+                )
+                return None
+
+        leader = self._group_leader.get(group_key)
+        if leader is None:
+            return None
+        others = [g for g in self._replicas if g != leader]
+        target = max(others, key=self._estimated_free, default=None)
+        if target is None:
+            return None
+        self._book(request_id, target, 0, context_size)
+        self._stagger_followers += 1
+        kv_source = None
+        if self._p2p_kv_available:
+            # The leader's P2P control socket, matching what _continue_or_migrate sends.
+            kv_source = f"{p2p_listener_host(self._replicas.index(leader))}:{self._p2p_port}"
+        return {"replica": target, "kv_source": kv_source}
+
+    def _mark_group_ready(self, request_id: str) -> None:
+        """Release a group's followers once THIS leader's turn 0 has completed.
+
+        Keyed on the leader's request_id: keying on its replica would release every
+        group that happened to share that replica, letting followers pull from a
+        peer that has not computed their prefix.
+        """
+        gk = self._group_leader_rid.get(request_id)
+        if gk is None:
+            return
+        ev = self._group_ready.get(gk)
+        if ev is not None and not ev.is_set():
+            ev.set()
 
     async def _lpt_place(self, request_id: str, context_size: float, session_work) -> str:
         """Windowed longest-processing-time-first placement.
@@ -405,6 +494,9 @@ class AdmissionLedger:
 
     def record_turn(self, request_id: str, *, turn_index: int, context_size: float) -> None:
         """Record the context size measured after a completed turn."""
+        if self._stagger_groups and turn_index == 0:
+            # The leader's prefix is now resident, so its followers may pull it.
+            self._mark_group_ready(request_id)
         replica = self._resident.get(request_id)
         if replica is None:
             return
@@ -435,6 +527,9 @@ class AdmissionLedger:
             "estimated_free": {r: self._estimated_free(r) for r in self._replicas},
             "admitted": self._admitted_count,
             "rebalances": self._rebalances,
+            "stagger_leaders": self._stagger_leaders,
+            "stagger_followers": self._stagger_followers,
+            "stagger_timeouts": self._stagger_timeouts,
             "delayed_polls": self._delayed_polls,
             "forced_admissions": self._forced_admissions,
             "migrations": self._migrations,

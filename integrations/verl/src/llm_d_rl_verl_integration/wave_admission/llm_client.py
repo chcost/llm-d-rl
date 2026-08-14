@@ -85,6 +85,7 @@ class WaveAdmissionLLMClient(LLMServerClient):
             rid, turn_index=turn, context_size=context_size,
             session_final=kwargs.pop("session_final", None),
             session_work=kwargs.pop("session_work", None),
+            group_key=kwargs.pop("group_key", None),
         )
         replica = placement["replica"]
         kv_source = placement.get("kv_source")
