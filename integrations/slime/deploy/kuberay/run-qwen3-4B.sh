@@ -33,23 +33,14 @@ MODEL_DIR="/tmp/slime/models/${MODEL_NAME:-Qwen3-4B}"
 TORCH_DIST_DIR="/tmp/slime/models/${MODEL_NAME:-Qwen3-4B}_torch_dist"
 DATA_DIR="/tmp/slime/data"
 
-MODEL_ARGS=(
-  --swiglu
-  --num-layers 36
-  --hidden-size 2560
-  --ffn-hidden-size 9728
-  --num-attention-heads 32
-  --group-query-attention
-  --num-query-groups 8
-  --use-rotary-position-embeddings
-  --rotary-base 1000000
-  --disable-bias-linear
-  --normalization RMSNorm
-  --norm-epsilon 1e-6
-  --vocab-size 151936
-  --kv-channels 128
-  --qk-layernorm
-)
+# Same MODEL_ARGS as slime's own example; extras (router, batch, paths) stay below.
+SLIME_MODEL_SCRIPT="/tmp/slime-src/scripts/models/qwen3-4B.sh"
+if [ ! -f "$SLIME_MODEL_SCRIPT" ]; then
+  echo "Missing $SLIME_MODEL_SCRIPT — wait for postStart to finish cloning slime ( /tmp/slime_ready.txt )." >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$SLIME_MODEL_SCRIPT"
 
 # --- 1. Download model weights ---
 if [ ! -d "$MODEL_DIR" ] || [ "$FORCE_DOWNLOAD" = true ]; then
@@ -118,10 +109,10 @@ ray job submit \
     --apply-chat-template \
     --num-rollout "$STEPS" \
     --rollout-batch-size 32 \
-    --n-samples-per-prompt 8 \
+    --n-samples-per-prompt 4 \
     --rollout-max-response-len 8192 \
     --rollout-temperature 1 \
-    --global-batch-size 256 \
+    --global-batch-size 128 \
     --balance-data \
     --rm-type deepscaler \
     --advantage-estimator grpo \

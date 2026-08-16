@@ -7,23 +7,29 @@
 #       vime's built-in vLLM router
 #   bash /etc/llmd-configs/run-qwen3-4B.sh --llmd
 #       llm-d EPP + Envoy routing (--vllm-router-ip/-port point vime at Envoy)
+#   bash /etc/llmd-configs/run-qwen3-4B.sh --native --steps 6
+#       short run (6 training steps); default: 500
 #
-# Both modes run the same engine layout - 2 engines at TP=1
-# (--rollout-num-gpus 2 --rollout-num-gpus-per-engine 1, set unconditionally
+# Both modes run the same engine layout - 4 engines at TP=1
+# (--rollout-num-gpus 4 --rollout-num-gpus-per-engine 1, set unconditionally
 # below) - so the only difference between the two arms is who picks the endpoint.
 set -euo pipefail
 
 MODE=""
+STEPS=500
 FORCE_DOWNLOAD=false
-for arg in "$@"; do
-  case "$arg" in
-    --native)         MODE=native ;;
-    --llmd)           MODE=llmd ;;
-    --force-download) FORCE_DOWNLOAD=true ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --native)         MODE=native; shift ;;
+    --llmd)           MODE=llmd; shift ;;
+    --steps)          STEPS="$2"; shift 2 ;;
+    --steps=*)        STEPS="${1#--steps=}"; shift ;;
+    --force-download) FORCE_DOWNLOAD=true; shift ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 if [ -z "$MODE" ]; then
-  echo "Usage: $0 --native | --llmd [--force-download]" >&2
+  echo "Usage: $0 --native | --llmd [--steps N] [--force-download]" >&2
   exit 1
 fi
 
@@ -69,7 +75,7 @@ else
 fi
 
 # --- 3. Submit training ---
-echo "=== Submitting training job (mode: $MODE) ==="
+echo "=== Submitting training job (mode: $MODE, steps: $STEPS) ==="
 
 EXTRA_ARGS=()
 if [ "$MODE" = "llmd" ]; then
@@ -86,6 +92,7 @@ ray job submit \
     "${MODEL_ARGS[@]}" \
     --hf-checkpoint "$MODEL_DIR" \
     --load "$MEGATRON_DIR" \
+    --ref-load "$MEGATRON_DIR" \
     --prompt-data "$DATASET_DIR/${DATASET_NAME:-dapo-math-17k}.jsonl" \
     --input-key prompt \
     --label-key label \
@@ -93,18 +100,22 @@ ray job submit \
     --rm-type deepscaler \
     --actor-num-nodes 1 \
     --actor-num-gpus-per-node 2 \
+    --tensor-model-parallel-size 2 \
+    --sequence-parallel \
     --recompute-activations \
-    --rollout-num-gpus 2 \
+    --rollout-num-gpus 4 \
     --rollout-num-gpus-per-engine 1 \
-    --rollout-batch-size 16 \
-    --num-rollout 3000 \
-    --n-samples-per-prompt 8 \
-    --num-steps-per-rollout 1 \
+    --rollout-batch-size 32 \
+    --num-rollout "$STEPS" \
+    --n-samples-per-prompt 4 \
     --global-batch-size 128 \
-    --rollout-max-response-len 4096 \
+    --rollout-max-response-len 8192 \
     --rollout-temperature 1 \
     --balance-data \
     --advantage-estimator grpo \
+    --use-kl-loss \
+    --kl-loss-coef 0.001 \
+    --kl-loss-type low_var_kl \
     --entropy-coef 0.00 \
     --eps-clip 0.2 \
     --eps-clip-high 0.28 \
@@ -114,5 +125,11 @@ ray job submit \
     --weight-decay 0.1 \
     --adam-beta1 0.9 \
     --adam-beta2 0.98 \
-    --vllm-gpu-memory-utilization 0.9 \
+    --use-dynamic-batch-size \
+    --max-tokens-per-gpu 9216 \
+    --vllm-gpu-memory-utilization 0.7 \
+    --attention-dropout 0.0 \
+    --hidden-dropout 0.0 \
+    --accumulate-allreduce-grads-in-fp32 \
+    --attention-softmax-in-fp32 \
     "${EXTRA_ARGS[@]}"

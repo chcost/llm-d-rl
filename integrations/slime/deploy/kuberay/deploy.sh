@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Deploy (or tear down) the slime KubeRay cluster using the single config in
 # deploy.env. Renders ray-cluster.yaml.tmpl with the image refs and namespace,
-# builds the llmd-epp-configs ConfigMap from the standalone config files, and
-# applies both — images and namespace are defined in exactly one place.
+# builds the llmd-epp-configs-slime ConfigMap from common/deploy (envoy + burst
+# EPP with EPP_PARSER=sglanghttp-parser) plus this directory's run script.
 #
 # Usage:
 #   ./deploy.sh                  # create ConfigMap + apply the cluster
@@ -24,6 +24,12 @@ set +a
 
 # NAMESPACE is per-user and comes from the environment, not deploy.env.
 : "${NAMESPACE:?not set - export NAMESPACE=<your-namespace>}"
+# Burst EPP parser. Default is vllmhttp-parser; slime overrides in deploy.env.
+# Must be exported: envsubst only substitutes exported variables, otherwise
+# ${EPP_PARSER} becomes empty and EPP refuses to start (plugin '' missing type).
+export EPP_PARSER="${EPP_PARSER:-vllmhttp-parser}"
+
+COMMON_DEPLOY="$(cd ../../../common/deploy && pwd)"
 
 render() {
   # Explicit var list prevents envsubst from expanding shell $-vars inside
@@ -33,12 +39,15 @@ render() {
 }
 
 create_configmap() {
-  # Include router_shim.py so the postStart hook can use it directly from the
-  # ConfigMap mount (/etc/llmd-configs/router_shim.py) without a git clone.
-  kubectl create configmap llmd-epp-configs \
-    --from-file=epp-config.yaml=../epp-config.yaml \
-    --from-file=envoy.yaml=../envoy.yaml \
-    --from-file=router_shim.py=../../shim/router_shim.py \
+  # Burst EPP + Envoy live in integrations/common/deploy/. Render the parser
+  # name here (scoped envsubst — do not pass the RayCluster var list).
+  local rendered
+  rendered="$(mktemp)"
+  trap 'rm -f "$rendered"' RETURN
+  envsubst '${EPP_PARSER}' < "$COMMON_DEPLOY/epp-config-burst.yaml" > "$rendered"
+  kubectl create configmap llmd-epp-configs-slime \
+    --from-file=epp-config.yaml="$rendered" \
+    --from-file=envoy.yaml="$COMMON_DEPLOY/envoy-shim.yaml" \
     --from-file=run-qwen3-4B.sh=run-qwen3-4B.sh \
     --namespace "$NAMESPACE" \
     --dry-run=client -o yaml | kubectl apply -f -

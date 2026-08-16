@@ -15,23 +15,23 @@ the rollout itself. They can be adopted separately.
 
 ```
 llm-d-rl/
-├── README.md
-├── integrations/                 # plug llm-d into RL training frameworks (Python)
-│   ├── common/                   # framework-agnostic EPP client, endpoints writer, router launcher
+├── integrations/                 # one directory per framework
 │   ├── verl/
-│   └── vime/
+│   ├── vime/
+│   ├── slime/
+│   └── common/                   # library used by the three above
 └── experimental/
-    └── rl-controller/            # control plane for orchestrating RL tasks (Go + Python)
+    └── rl-controller/            # control plane (Go + Python); independent of integrations/
 ```
 
 ## integrations/
 
 This section describes how to integrate llm-d into various RL post-training
 frameworks. Supported today: [verl](integrations/verl/) (the most complete - EPP
-routing, llm-d serving, PD and P2P KV-cache sharing) and
-[vime](integrations/vime/) (EPP routing via a registration shim).
-[`common/`](integrations/common/) holds what neither of them should own twice:
-the EPP gRPC client, the endpoints-YAML writer, and the EPP/Envoy launcher.
+routing, llm-d serving, PD and P2P KV-cache sharing),
+[vime](integrations/vime/) (llm-d routing, vLLM engines), and
+[slime](integrations/slime/) (llm-d routing, SGLang engines).
+Shared code and configs live in [`common/`](integrations/common/).
 
 The common idea is to replace the framework's default round-robin replica
 selection with llm-d's **Endpoint Picker Plugin (EPP)**, which scores each

@@ -1,4 +1,4 @@
-# Envoy config for verl — mirrors the no-Kubernetes deployment guide.
+# Mirrors the no-Kubernetes deployment guide.
 # Listener on :8081, ext_proc to EPP on localhost:9002, ORIGINAL_DST routing.
 # Source: https://github.com/llm-d/llm-d/blob/main/guides/no-kubernetes-deployment/router/envoy/envoy.yaml
 

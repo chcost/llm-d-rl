@@ -12,27 +12,9 @@ spec:
   headGroupSpec:
     rayStartParams:
       num-cpus: "16"
-      num-gpus: "4"
+      num-gpus: "6"
     template:
       spec:
-        affinity:
-          nodeAffinity:
-            requiredDuringSchedulingIgnoredDuringExecution:
-              nodeSelectorTerms:
-              - matchExpressions:
-                # Exclude known-faulty nodes. Add hostnames as needed.
-                - key: kubernetes.io/hostname
-                  operator: NotIn
-                  values:
-                  - excluded-node
-                  - pokprod-b93r44s0
-                # Uncomment to pin to specific nodes (e.g. a GPU island).
-                # - key: kubernetes.io/hostname
-                #   operator: In
-                #   values:
-                #   - gpu-node-1
-                #   - gpu-node-2
-
         initContainers:
         - name: fetch-binaries
           image: ${IMG_CRANE}
@@ -88,16 +70,13 @@ spec:
                   mkdir -p /tmp/pyfix
                   printf 'import sys\nclass _S:\n def __init__(self,f):self._f=f\n def find_spec(self,*a,**k):\n  try:return self._f.find_spec(*a,**k)\n  except(PermissionError,OSError):return None\nsys.meta_path[:]=[_S(f) if "editable" in getattr(type(f),"__module__","") else f for f in sys.meta_path]\n' > /tmp/pyfix/sitecustomize.py
 
-                  # Install the common package first (vime integration depends on it), then the
-                  # integration package itself. Fail loudly: set -e aborts before the ready
-                  # marker if a clone/build fails, and the import checks turn a silent empty
-                  # install into a hard postStart error (container restarts) instead of a pod
-                  # that looks ready but is broken.
-                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/common"
+                  # Install the common package (provides llm-d-rl-router and llm-d-registration-shim).
+                  # Fail loudly: set -e aborts before the ready marker if the install fails,
+                  # and the import check turns a silent empty install into a hard postStart
+                  # error (container restarts) instead of a pod that looks ready but is broken.
+                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/NaomiEisen/llm-d-rl.git@slime-integration#subdirectory=integrations/common"
                   python3 -c "import llm_d_rl_common" || { echo "FATAL: common package not importable after install"; exit 1; }
                   command -v llm-d-rl-router > /dev/null || { echo "FATAL: llm-d-rl-router not on PATH after installing common"; exit 1; }
-                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/vime"
-                  python3 -c "import llm_d_rl_vime_integration" || { echo "FATAL: vime integration package not importable after install"; exit 1; }
 
                   # Pre-create empty endpoints file so EPP's file-discovery plugin
                   # can watch it from the start (EPP crashes if the file is absent).
@@ -115,7 +94,8 @@ spec:
                     --envoy-config /etc/llmd-configs/envoy.yaml \
                     >> /tmp/router.log 2>&1 &
 
-                  nohup vime-router-shim \
+                  nohup llm-d-registration-shim \
+                    --engine-type vllm \
                     --host 127.0.0.1 --port 3001 \
                     --endpoints-file /tmp/epp-endpoints.yaml \
                     > /tmp/shim.log 2>&1 &
@@ -181,11 +161,11 @@ spec:
             limits:
               cpu: "32"
               memory: "256G"
-              nvidia.com/gpu: "4"
+              nvidia.com/gpu: "6"
             requests:
               cpu: "16"
               memory: "128G"
-              nvidia.com/gpu: "4"
+              nvidia.com/gpu: "6"
 
           ports:
           - containerPort: 6379

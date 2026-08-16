@@ -55,6 +55,11 @@ set +a
 # An empty VERL_COMMIT would render a bare `git checkout`, which exits 0 and
 # leaves the clone on its default branch - a silently wrong verl version.
 : "${VERL_COMMIT:?not set - define it in deploy.env}"
+# EPP parser for common/deploy/epp-config-burst.yaml.
+# Default is vllmhttp-parser; only slime overrides this.
+export EPP_PARSER="${EPP_PARSER:-vllmhttp-parser}"
+
+COMMON_DEPLOY="$(cd ../../../common/deploy && pwd)"
 
 # Resolve the per-engine column from deploy.env into the names the manifest uses.
 # Fails fast on an engine with no column rather than rendering blank values into a
@@ -89,16 +94,18 @@ render_retriever() {
 }
 
 create_configmap() {
-  # epp-config.yaml / epp-config-pd.yaml / envoy.yaml / epp-config-inflight.yaml /
-  # epp-config-inflight-cap.yaml are the source of truth; build the ConfigMap
-  # from them (idempotent apply) into the configured namespace. envoy.yaml is
-  # consumed by the llm-d stack (Envoy) integration. epp-config-inflight*.yaml
-  # are the configs for --mode epp-inflight / epp-fc (custom.epp_report_completion).
+  # Burst EPP and no-shim Envoy live in integrations/common/deploy/. verl-only
+  # EPP variants (p2p / inflight / pd) stay in this tree. Render the parser
+  # name with a scoped envsubst.
+  local rendered
+  rendered="$(mktemp)"
+  trap 'rm -f "$rendered"' RETURN
+  envsubst '${EPP_PARSER}' < "$COMMON_DEPLOY/epp-config-burst.yaml" > "$rendered"
   kubectl create configmap llmd-epp-configs \
-    --from-file=epp-config.yaml=../epp-config.yaml \
+    --from-file=epp-config.yaml="$rendered" \
     --from-file=epp-config-p2p.yaml=../epp-config-p2p.yaml \
     --from-file=epp-config-p2p-load.yaml=../epp-config-p2p-load.yaml \
-    --from-file=envoy.yaml=../envoy.yaml \
+    --from-file=envoy.yaml="$COMMON_DEPLOY/envoy.yaml" \
     --from-file=searchr1_tool_config.yaml=../../benchmarks/workloads/searchr1/tool_config.yaml \
     --from-file=epp-config-inflight.yaml=../epp-config-inflight.yaml \
     --from-file=epp-config-inflight-cap.yaml=../epp-config-inflight-cap.yaml \

@@ -4,18 +4,18 @@ Step-by-step guide for deploying the vime + llm-d cluster and running training. 
 
 ## Prerequisites
 
-- Kubernetes cluster with GPU nodes (4 GPUs on a single node for the Qwen3-4B example)
-- KubeRay operator installed (see [setting-kuberay.md](../../../verl/deploy/kuberay/setting-kuberay.md) - the operator install is framework-agnostic)
+- Kubernetes cluster with GPU nodes (6 GPUs on a single node for the Qwen3-4B example)
+- KubeRay operator installed (see [setting-kuberay.md](../../../verl/deploy/kuberay/setting-kuberay.md).
 - `envsubst` and `kubectl` on your PATH
 
-## Step 1 - Configure
+## Step 1 — Configure
 
-Export your namespace (required - not stored in a file):
+Export your namespace (required — not stored in a file):
 ```bash
 export NAMESPACE=<your-namespace>
 ```
 
-Images are defined in `deploy.env` - edit tags there rather than in the manifest:
+Images are defined in `deploy.env` — edit tags there rather than in the manifest:
 
 | Variable | Image |
 |---|---|
@@ -24,19 +24,22 @@ Images are defined in `deploy.env` - edit tags there rather than in the manifest
 | `IMG_EPP` | `ghcr.io/llm-d/llm-d-router-endpoint-picker-dev:95625abeed826accc4dfa7903ef34a4d369830d8` (keep in step with the verl tree) |
 | `IMG_ENVOY` | `docker.io/envoyproxy/envoy:distroless-v1.33.2` |
 
-If needed, adjust the manifest:
-- **GPU count** - `resources.limits.nvidia.com/gpu` defaults to 4; edit to match your node
-- **Node placement** - `nodeAffinity` has two knobs:
-  - `NotIn` - exclude known-faulty nodes; replace the placeholder hostnames with your own
-  - `In` - pin to specific nodes; uncomment the block and add the target hostnames
+EPP and Envoy are not in the vime image. The `fetch-binaries` init container on the head pod extracts them from their separate public images at pod start using crane. Update a binary without rebuilding by bumping its tag in `deploy.env` and recreating the pod.
 
-## Step 2 - Deploy
+If needed, adjust the manifest:
+- **GPU count** — `resources.limits.nvidia.com/gpu` defaults to 6; edit to match your node
+
+## Step 2 — Deploy
 
 ```bash
 bash deploy.sh apply
 ```
 
-This builds the `llmd-epp-configs-vime` ConfigMap (from the verl tree's `epp-config.yaml`, plus this directory's `envoy.yaml` and `run-qwen3-4B.sh`) and applies the rendered cluster manifest. `router_shim.py` is not in the ConfigMap - it ships in the `llm-d-rl-vime-integration` package that `postStart` pip-installs, and runs as the `vime-router-shim` console script.
+This builds the `llmd-epp-configs-vime` ConfigMap from
+[`common/deploy/`](../../../common/deploy/) (`envoy-shim.yaml` and
+`epp-config-burst.yaml` with the default `vllmhttp-parser`) plus this
+directory's `run-qwen3-4B.sh`, and applies the rendered cluster manifest. The
+shim is `llm-d-registration-shim` from the common package that `postStart` pip-installs.
 
 Useful sub-commands:
 ```bash
@@ -45,7 +48,7 @@ bash deploy.sh configmap  # rebuild ConfigMap only
 bash deploy.sh delete     # tear down the cluster
 ```
 
-## Step 3 - Wait for setup
+## Step 3 — Wait for setup
 
 ```bash
 kubectl get pods -n $NAMESPACE -w
@@ -61,7 +64,7 @@ kubectl exec -n $NAMESPACE $HEAD -- test -f /tmp/vime_ready.txt && echo "ready"
 
 PostStart completes when vime is installed and llm-d routing is running. Model download and weight conversion happen in the next step.
 
-## Step 4 - Health check (optional)
+## Step 4 — Health check (optional)
 
 Verify all three services are up before submitting a training job:
 
@@ -79,20 +82,18 @@ kubectl exec -n $NAMESPACE $HEAD -- bash -c \
   'echo > /dev/tcp/127.0.0.1/3001 && echo "Shim OK" || echo "Shim DOWN"'
 ```
 
-## Step 5 - Run training
+## Step 5 — Run training
 
 Exec into the head pod and run the training script:
 
 ```bash
 kubectl exec -it -n "$NAMESPACE" "$HEAD" -- bash
 
-# Inside the head pod:
-
-# Validate with vime's built-in router first (optional):
-bash /etc/llmd-configs/run-qwen3-4B.sh --native
-
 # Run with llm-d routing:
 bash /etc/llmd-configs/run-qwen3-4B.sh --llmd
+
+# Run native training (vllm router)
+bash /etc/llmd-configs/run-qwen3-4B.sh --native
 ```
 
 The script downloads Qwen3-4B and the dapo-math-17k dataset, converts weights to Megatron format (once, skipped on re-runs), then submits the Ray job.
@@ -122,15 +123,15 @@ kubectl exec -n $NAMESPACE $HEAD -- tail -f /tmp/shim.log
 
 ## EPP config
 
-[`../../../verl/deploy/epp-config.yaml`](../../../verl/deploy/epp-config.yaml) is the
-active config - one copy, shared with the verl integration. To update it on a running
-cluster:
+[`../../../common/deploy/epp-config-burst.yaml`](../../../common/deploy/epp-config-burst.yaml)
+is the active config (parser defaults to `vllmhttp-parser`).
+To update it on a running cluster:
 
 ```bash
 bash deploy.sh configmap
 ```
 
-Then restart EPP to pick up the new config - the ConfigMap is mounted read-only, so the file on disk updates automatically, but EPP only reads it at startup:
+Then restart EPP to pick up the new config — the ConfigMap is mounted read-only, so the file on disk updates automatically, but EPP only reads it at startup:
 
 ```bash
 # llm-d-rl-router exits when a child dies, so killing EPP stops the router too;
