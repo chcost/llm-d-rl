@@ -21,7 +21,7 @@ Images are defined in `deploy.env` — edit tags there rather than in the manife
 |---|---|
 | `IMG_SLIME` | `slimerl/slime:latest` |
 | `IMG_CRANE` | `gcr.io/go-containerregistry/crane@sha256:1b1fb24d2b1bb27a9daf81a588157e68463876904e8e537a812edba6284fb252` |
-| `IMG_EPP` | `ghcr.io/naomieisen/llm-d-router-epp:sglang-parser` (includes `sglanghttp-parser`) |
+| `IMG_EPP` | `<epp-image-with-sglanghttp-parser>` (must include `sglanghttp-parser`) |
 | `IMG_ENVOY` | `docker.io/envoyproxy/envoy:distroless-v1.33.2` |
 
 EPP and Envoy are not in the slime image. The `fetch-binaries` init container on the head pod extracts them from their separate public images at pod start using crane. Update a binary without rebuilding by bumping its tag in `deploy.env` and recreating the pod.

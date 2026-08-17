@@ -27,8 +27,7 @@ export PYTHONPATH=$(pwd)/llm-d-rl/integrations/common/src:$PYTHONPATH
 
 ### 2. Get the llm-d routing binaries
 
-EPP and Envoy are launched as external processes at runtime; they are not baked into the slime image. Obtain them from the published llm-d images or build from source and place them somewhere on `PATH` (the KubeRay setup extracts them to `/opt/llm-d-bins/` via an initContainer). The slime `deploy.env` pins an EPP image that includes `sglanghttp-parser`.
-
+EPP and Envoy are launched as external processes at runtime; they are not baked into the slime image. Obtain them from the published llm-d images or build from source and place them somewhere on `PATH` (the KubeRay setup extracts them to `/opt/llm-d-bins/` via an initContainer). Slime's EPP binary must include `sglanghttp-parser`.
 ### 3. Place the config files
 
 Copy these starting-point configs to any path readable on the head node:

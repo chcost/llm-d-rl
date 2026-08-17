@@ -24,6 +24,13 @@ set +a
 
 # NAMESPACE is per-user and comes from the environment, not deploy.env.
 : "${NAMESPACE:?not set - export NAMESPACE=<your-namespace>}"
+# EPP image must include sglanghttp-parser; deploy.env ships a placeholder.
+case "${IMG_EPP:-}" in
+  ""|*REPLACE*|*placeholder*|"<epp-image-with-sglanghttp-parser>")
+    echo "IMG_EPP is a placeholder — set it in deploy.env to an EPP image that includes sglanghttp-parser" >&2
+    exit 2
+    ;;
+esac
 # Burst EPP parser. Default is vllmhttp-parser; slime overrides in deploy.env.
 # Must be exported: envsubst only substitutes exported variables, otherwise
 # ${EPP_PARSER} becomes empty and EPP refuses to start (plugin '' missing type).
