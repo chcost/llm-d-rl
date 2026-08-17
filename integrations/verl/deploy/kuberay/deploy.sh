@@ -94,9 +94,6 @@ render_retriever() {
 }
 
 create_configmap() {
-  # Burst EPP and no-shim Envoy live in integrations/common/configs/. verl-only
-  # EPP variants (p2p / inflight / pd) stay in this tree. Render the parser
-  # name with a scoped envsubst.
   local rendered
   rendered="$(mktemp)"
   trap 'rm -f "$rendered"' RETURN

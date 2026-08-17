@@ -1,12 +1,6 @@
 # Burst prefix-cache EPP config.
 # The request parser is the one integration-specific field. deploy.sh defaults
 # EPP_PARSER to vllmhttp-parser; only slime overrides it (sglanghttp-parser).
-#
-# windowDurationMs must be wide enough to capture a whole rollout step's
-# same-prompt samples; too small -> partial grouping. It adds up to
-# windowDurationMs latency per request. 1000ms works for most GRPO bursts;
-# narrow it if you see unnecessary added latency on fast rollouts.
-
 apiVersion: llm-d.ai/v1alpha1
 kind: EndpointPickerConfig
 
@@ -27,6 +21,21 @@ plugins:
 
   - name: burst-prefix-cache-producer
     type: burst-prefix-cache-producer
+    # Co-locate the G group-samples of a prompt onto one replica instead of
+    # scattering them on a cold cache (the RL rollout group-scatter problem).
+    # windowDurationMs must be wide enough to capture a whole rollout step's
+    # same-prompt samples (verl dispatches them in one burst); too small ->
+    # partial grouping. It adds up to windowDurationMs latency per request.
+    # 100ms is the default: on GSM8K/HotpotQA a rollout step's burst arrives within
+    # one 100ms window and within-step co-location was already ~82-99%. A QuALITY
+    # experiment raised this to 1500ms to fit the huge ~6.7k-tok article prompts'
+    # wider arrival spread into ONE window (100ms had split each step into ~5 windows,
+    # co-loc ~35% -> "size-8"/within-step ~82%; 1500ms lifted within-step to ~100%).
+    # That gain was OVERKILL: the QuALITY EPP win came from shuffle-on (native
+    # prefix-hit 91%->42%), not the window, and 1500ms cost pick_s ~250ms->1668ms
+    # (~+1.4s/step) for a co-loc gain EPP did not need (its own hit was 93-97% either
+    # way). Reverted to 100ms; widen again only if a workload's per-step arrival burst
+    # is measurably too spread for one 100ms window.
     parameters:
       windowDurationMs: 1000
       maxPerReplica: -1     # -1 = whole group to one replica (max co-location)

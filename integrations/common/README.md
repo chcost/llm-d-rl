@@ -59,8 +59,10 @@ talks to that one address.
 
 | Component | Port | Role |
 |---|---|---|
-| EPP | 9002 (gRPC) | ext_proc filter; scores and picks the target engine |
+| EPP | 9002 (gRPC) | Scores replicas and picks the target engine |
 | Envoy | 8081 (HTTP) | Forwards inference through EPP (`envoy.yaml`), or also `/workers*` to the shim (`envoy-shim.yaml`) |
+
+vime and slime start this stack with the `llm-d-rl-router` command:
 
 ```
 llm-d-rl-router --epp-config ... --envoy-config ...

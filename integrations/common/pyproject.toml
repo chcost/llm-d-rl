@@ -19,11 +19,7 @@ dependencies = [
 # Foreground EPP/Envoy launcher, for frameworks that start the router stack from
 # a pod lifecycle hook rather than from inside the training process.
 llm-d-rl-router = "llm_d_rl_common.cli:main"
-# FastAPI server that accepts vllm-router / sglang-router worker register/deregister
-# calls (POST/DELETE /workers) and writes the YAML file EPP's file-discovery
-# plugin watches.
-# Usage: llm-d-registration-shim --engine-type vllm
-#        llm-d-registration-shim --engine-type sglang --id-field id
+
 llm-d-registration-shim = "llm_d_rl_common.registration_shim:main"
 
 [tool.setuptools.packages.find]

@@ -19,7 +19,7 @@ llm-d-rl/
 │   ├── verl/
 │   ├── vime/
 │   ├── slime/
-│   └── common/                   # library used by the three above
+│   └── common/                   # library and configs used by the three above
 └── experimental/
     └── rl-controller/            # control plane (Go + Python); independent of integrations/
 ```

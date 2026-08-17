@@ -2,15 +2,14 @@
 
 FastAPI server that accepts vllm-router / sglang-router worker register/deregister
 calls (POST/DELETE /workers) and writes the YAML file EPP's file-discovery
-plugin watches. EPP does not speak that HTTP API; verl writes the file from
-the trainer instead.
+plugin watches.
 
 Start with:
     llm-d-registration-shim --engine-type vllm               # URL-keyed (vllm-router / vime)
     llm-d-registration-shim --engine-type sglang --id-field id  # UUID-keyed (sglang-router / slime)
 
 Endpoints:
-    POST   /workers            register engine   body: {url, worker_type?}
+    POST   /workers            register engine   body: {url} required, {worker_type} optional
     GET    /workers            list engines
     DELETE /workers/{ref:path} deregister engine  ref = id_field value returned by POST
 """

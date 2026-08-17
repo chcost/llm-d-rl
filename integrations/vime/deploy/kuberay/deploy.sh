@@ -39,8 +39,6 @@ render() {
 }
 
 create_configmap() {
-  # Burst EPP + Envoy live in integrations/common/configs/. Render the parser
-  # name here (scoped envsubst — do not pass the RayCluster var list).
   local rendered
   rendered="$(mktemp)"
   trap 'rm -f "$rendered"' RETURN

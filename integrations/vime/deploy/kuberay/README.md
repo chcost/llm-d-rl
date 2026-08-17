@@ -113,7 +113,7 @@ ray job stop <job-id> --address=http://127.0.0.1:8265 # graceful stop
 | `/tmp/envoy.log` | Envoy |
 | `/tmp/router.log` | `llm-d-rl-router` itself (startup, readiness, child exits) |
 | `/tmp/shim.log` | Registration shim |
-| `/tmp/ray/session_latest/logs/worker-*.out` | vLLM engine output |
+| `/tmp/ray/session_latest/logs/job-driver-<job_id>.log` | training logs |
 
 ```bash
 kubectl exec -n $NAMESPACE $HEAD -- tail -f /tmp/epp.log

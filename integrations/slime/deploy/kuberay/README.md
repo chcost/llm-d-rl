@@ -98,9 +98,6 @@ bash /etc/llmd-configs/run-qwen3-4B.sh --mode llm-d
 bash /etc/llmd-configs/run-qwen3-4B.sh --mode native
 ```
 
-`--mode llm-d` points `--sglang-router-ip`/`--sglang-router-port` at Envoy (EPP picks the engine).
-`--mode native` omits those args; slime manages its own sglang-router for a baseline comparison.
-
 The script downloads Qwen3-4B, converts weights to Megatron format (once, skipped on re-runs), then submits the Ray job.
 
 To stop a running job:
@@ -118,6 +115,7 @@ ray job stop <job-id> --address=http://127.0.0.1:8265 # graceful stop
 | `/tmp/envoy.log` | Envoy |
 | `/tmp/router.log` | `llm-d-rl-router` itself (startup, readiness, child exits) |
 | `/tmp/shim.log` | Registration shim |
+| `/tmp/ray/session_latest/logs/job-driver-<job_id>.log` | training logs |
 | `/tmp/ray/session_latest/logs/worker-*.out` | SGLang engine output |
 
 ```bash
