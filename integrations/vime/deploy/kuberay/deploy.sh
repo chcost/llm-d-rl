@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy (or tear down) the vime KubeRay cluster using the single config in
 # deploy.env. Renders ray-cluster.yaml.tmpl with the image refs and namespace,
-# builds the llmd-epp-configs-vime ConfigMap from common/deploy (envoy + burst
+# builds the llmd-epp-configs-vime ConfigMap from common/configs (envoy + burst
 # EPP, default vllmhttp-parser) plus this directory's run script.
 #
 # Usage:
@@ -29,7 +29,7 @@ set +a
 # ${EPP_PARSER} becomes empty and EPP refuses to start (plugin '' missing type).
 export EPP_PARSER="${EPP_PARSER:-vllmhttp-parser}"
 
-COMMON_DEPLOY="$(cd ../../../common/deploy && pwd)"
+COMMON_CONFIGS="$(cd ../../../common/configs && pwd)"
 
 render() {
   # Explicit var list prevents envsubst from expanding shell $-vars inside
@@ -39,15 +39,15 @@ render() {
 }
 
 create_configmap() {
-  # Burst EPP + Envoy live in integrations/common/deploy/. Render the parser
+  # Burst EPP + Envoy live in integrations/common/configs/. Render the parser
   # name here (scoped envsubst — do not pass the RayCluster var list).
   local rendered
   rendered="$(mktemp)"
   trap 'rm -f "$rendered"' RETURN
-  envsubst '${EPP_PARSER}' < "$COMMON_DEPLOY/epp-config-burst.yaml" > "$rendered"
+  envsubst '${EPP_PARSER}' < "$COMMON_CONFIGS/epp-config-burst.yaml" > "$rendered"
   kubectl create configmap llmd-epp-configs-vime \
     --from-file=epp-config.yaml="$rendered" \
-    --from-file=envoy.yaml="$COMMON_DEPLOY/envoy-shim.yaml" \
+    --from-file=envoy.yaml="$COMMON_CONFIGS/envoy-shim.yaml" \
     --from-file=run-qwen3-4B.sh=./run-qwen3-4B.sh \
     --namespace "$NAMESPACE" \
     --dry-run=client -o yaml | kubectl apply -f -

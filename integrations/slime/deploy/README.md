@@ -32,10 +32,10 @@ EPP and Envoy are launched as external processes at runtime; they are not baked 
 
 Copy these starting-point configs to any path readable on the head node:
 
-- [`epp-config-burst.yaml`](../../common/deploy/epp-config-burst.yaml) — EPP
+- [`epp-config-burst.yaml`](../../common/configs/epp-config-burst.yaml) — EPP
   scorer pipeline (burst prefix-cache + load-aware). Render `EPP_PARSER` to
   `sglanghttp-parser` (see `kuberay/deploy.env`).
-- [`envoy-shim.yaml`](../../common/deploy/envoy-shim.yaml) — Envoy listener
+- [`envoy-shim.yaml`](../../common/configs/envoy-shim.yaml) — Envoy listener
   (inference through EPP, `/workers*` to the shim)
 
 The EPP config's `file-discovery` plugin `path:` must match the `--endpoints-file` passed to `llm-d-router-shim` (default `/tmp/epp-endpoints.yaml`).

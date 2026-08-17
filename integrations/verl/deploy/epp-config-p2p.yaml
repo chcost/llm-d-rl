@@ -7,7 +7,7 @@
 # --mode epp-p2p (rollout.name=vllm-llmd-p2p), which gives every replica's
 # reported address as its local sidecar's port, not vLLM's - see p2p_replica.py.
 #
-# Everything else is identical to common/deploy/epp-config-burst.yaml: same burst producer, same
+# Everything else is identical to common/configs/epp-config-burst.yaml: same burst producer, same
 # prefix-cache-scorer + load-aware-scorer profile. p2p-source-producer consumes
 # burst-prefix-cache-producer's PrefixCacheMatchInfo via prefixMatchInfoProducerName,
 # the same pattern prefix-cache-scorer already uses below.

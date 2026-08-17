@@ -55,11 +55,11 @@ set +a
 # An empty VERL_COMMIT would render a bare `git checkout`, which exits 0 and
 # leaves the clone on its default branch - a silently wrong verl version.
 : "${VERL_COMMIT:?not set - define it in deploy.env}"
-# EPP parser for common/deploy/epp-config-burst.yaml.
+# EPP parser for common/configs/epp-config-burst.yaml.
 # Default is vllmhttp-parser; only slime overrides this.
 export EPP_PARSER="${EPP_PARSER:-vllmhttp-parser}"
 
-COMMON_DEPLOY="$(cd ../../../common/deploy && pwd)"
+COMMON_CONFIGS="$(cd ../../../common/configs && pwd)"
 
 # Resolve the per-engine column from deploy.env into the names the manifest uses.
 # Fails fast on an engine with no column rather than rendering blank values into a
@@ -94,18 +94,18 @@ render_retriever() {
 }
 
 create_configmap() {
-  # Burst EPP and no-shim Envoy live in integrations/common/deploy/. verl-only
+  # Burst EPP and no-shim Envoy live in integrations/common/configs/. verl-only
   # EPP variants (p2p / inflight / pd) stay in this tree. Render the parser
   # name with a scoped envsubst.
   local rendered
   rendered="$(mktemp)"
   trap 'rm -f "$rendered"' RETURN
-  envsubst '${EPP_PARSER}' < "$COMMON_DEPLOY/epp-config-burst.yaml" > "$rendered"
+  envsubst '${EPP_PARSER}' < "$COMMON_CONFIGS/epp-config-burst.yaml" > "$rendered"
   kubectl create configmap llmd-epp-configs \
     --from-file=epp-config.yaml="$rendered" \
     --from-file=epp-config-p2p.yaml=../epp-config-p2p.yaml \
     --from-file=epp-config-p2p-load.yaml=../epp-config-p2p-load.yaml \
-    --from-file=envoy.yaml="$COMMON_DEPLOY/envoy.yaml" \
+    --from-file=envoy.yaml="$COMMON_CONFIGS/envoy.yaml" \
     --from-file=searchr1_tool_config.yaml=../../benchmarks/workloads/searchr1/tool_config.yaml \
     --from-file=epp-config-inflight.yaml=../epp-config-inflight.yaml \
     --from-file=epp-config-inflight-cap.yaml=../epp-config-inflight-cap.yaml \

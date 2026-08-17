@@ -65,5 +65,5 @@ python3 benchmarks/workloads/scotus_xl/make_scotus.py --local_dir /tmp/verl/data
 benchmarks/scripts/run_test.sh --task scotus_xl --mode <native|epp> --steps 30
 ```
 
-The EPP arm needs `common/deploy/epp-config-burst.yaml` with `windowDurationMs: 1000` + `balanceBy: tokens` and
+The EPP arm needs `common/configs/epp-config-burst.yaml` with `windowDurationMs: 1000` + `balanceBy: tokens` and
 the token-balanced EPP binary.

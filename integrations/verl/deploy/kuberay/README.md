@@ -72,8 +72,8 @@ running pod without recreating it. See the [deployment guide](../README.md) for 
 ## Step 2 - Deploy
 
 `deploy.sh apply` does everything: it builds the `llmd-epp-configs` ConfigMap from
-[`common/deploy/`](../../../common/deploy/) (the rendered burst EPP profile)
-plus `common/deploy/envoy.yaml` and this tree's variants (`epp-config-pd.yaml`, p2p, inflight) and
+[`common/configs/`](../../../common/configs/) (the rendered burst EPP profile)
+plus `common/configs/envoy.yaml` and this tree's variants (`epp-config-pd.yaml`, p2p, inflight) and
 applies the rendered cluster manifest into `$NAMESPACE`.
 
 ```bash
@@ -274,7 +274,7 @@ bash /tmp/verl/verl/examples/grpo_trainer/run_qwen3_4b_fsdp.sh \
 
 ## EPP config
 
-[`../../../common/deploy/epp-config-burst.yaml`](../../../common/deploy/epp-config-burst.yaml)
+[`../../../common/configs/epp-config-burst.yaml`](../../../common/configs/epp-config-burst.yaml)
 (standard, parser defaults to `vllmhttp-parser`) and `../epp-config-pd.yaml`
 (PD disaggregated) are the starting-point configs. Customize scorer weights or swap plugins to tune routing for your workload.
 

@@ -11,6 +11,11 @@ other framework integration that needs to talk to EPP.
 
 ## Contents
 
+### src
+
+[`src/llm_d_rl_common/`](src/llm_d_rl_common/) is the Python package of
+shared components used by every integration.
+
 - `epp_grpc_client.py` - minimal hand-rolled EPP ext-proc gRPC client (`EPPGrpcClient`).
   `route()` is the entry point: it picks between EPP's fire-and-forget and
   tracked-completion protocols and returns a `RoutingResult` with a `.complete()`
@@ -27,21 +32,23 @@ other framework integration that needs to talk to EPP.
   receives engine registration requests and writes the EPP endpoints file
   (`--engine-type vllm` or `--engine-type sglang --id-field id`).
 
-## Deploy files
+### configs
 
-[`deploy/`](deploy/) holds the Envoy listener and the burst EPP scoring profile
-that every integration mounts. Each integration's `deploy.sh` points at these
-files; slime/vime/verl stay their own packages.
+[`configs/`](configs/) holds shared Envoy and EPP config. Each integration's `deploy.sh`
+points at these files.
 
-- [`deploy/envoy.yaml`](deploy/envoy.yaml) - listener on `:8081`, ext_proc to
-  EPP (verl serving; no registration shim)
-- [`deploy/envoy-shim.yaml`](deploy/envoy-shim.yaml) - same, plus `/workers*`
-  to `llm-d-registration-shim` (vime, slime)
-- [`deploy/epp-config-burst.yaml`](deploy/epp-config-burst.yaml) - burst
+- [`configs/envoy.yaml`](configs/envoy.yaml) — Base Envoy config: inference on
+  `:8081` (no registration API).
+- [`configs/envoy-shim.yaml`](configs/envoy-shim.yaml) — Same inference path as
+  the base Envoy config, plus `/workers*` forwarded to
+  `llm-d-registration-shim`.
+- [`configs/epp-config-burst.yaml`](configs/epp-config-burst.yaml) - burst
   prefix-cache profile. Parser defaults to `vllmhttp-parser`; slime sets
   `EPP_PARSER=sglanghttp-parser` in its `deploy.env`.
 
 ## llm-d router stack
+
+Used by the vime and slime integrations.
 
 The llm-d stack is the rollout endpoint for the RL training frameworks.
 The stack includes Envoy (the HTTP proxy on `:8081`) and the llm-d
@@ -49,8 +56,6 @@ Endpoint Picker (EPP) on `:9002`, which provides the routing
 intelligence. The framework sends generation to Envoy; Envoy asks EPP
 for a replica, then forwards the request there. The trainer only ever
 talks to that one address.
-
-Used by the vime and slime integrations.
 
 | Component | Port | Role |
 |---|---|---|
