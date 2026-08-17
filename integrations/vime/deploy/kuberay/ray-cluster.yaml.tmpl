@@ -74,7 +74,7 @@ spec:
                   # Fail loudly: set -e aborts before the ready marker if the install fails,
                   # and the import check turns a silent empty install into a hard postStart
                   # error (container restarts) instead of a pod that looks ready but is broken.
-                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/NaomiEisen/llm-d-rl.git@slime-integration#subdirectory=integrations/common"
+                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/common"
                   python3 -c "import llm_d_rl_common" || { echo "FATAL: common package not importable after install"; exit 1; }
                   command -v llm-d-rl-router > /dev/null || { echo "FATAL: llm-d-rl-router not on PATH after installing common"; exit 1; }
 

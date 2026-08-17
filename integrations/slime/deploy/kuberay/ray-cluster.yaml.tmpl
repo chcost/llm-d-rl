@@ -76,7 +76,7 @@ spec:
                   git clone --depth=1 -b core_v0.16.0 https://github.com/NVIDIA/Megatron-LM.git /tmp/Megatron-LM
                   mkdir -p /tmp/pyfix
                   printf 'import sys\nclass _S:\n def __init__(self,f):self._f=f\n def find_spec(self,*a,**k):\n  try:return self._f.find_spec(*a,**k)\n  except(PermissionError,OSError):return None\nsys.meta_path[:]=[_S(f) if "editable" in getattr(type(f),"__module__","") else f for f in sys.meta_path]\n' > /tmp/pyfix/sitecustomize.py
-                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/NaomiEisen/llm-d-rl.git@slime-integration#subdirectory=integrations/common"
+                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/common"
                   python3 -c "import llm_d_rl_common" || { echo "FATAL: common package not importable after install"; exit 1; }
                   command -v llm-d-rl-router > /dev/null || { echo "FATAL: llm-d-rl-router not on PATH after installing common"; exit 1; }
                   printf 'endpoints: []\n' > /tmp/epp-endpoints.yaml
