@@ -4,7 +4,8 @@
 #
 # Usage:
 #   bash /etc/llmd-configs/run-qwen3-4B.sh --native
-#       vime's built-in vLLM router
+#       vime's built-in vLLM router, with --router-balance-abs-threshold 0
+#       so cache-aware routing does not pin the whole batch on one engine
 #   bash /etc/llmd-configs/run-qwen3-4B.sh --llmd
 #       llm-d EPP + Envoy routing (--vllm-router-ip/-port point vime at Envoy)
 #   bash /etc/llmd-configs/run-qwen3-4B.sh --native --steps 6
@@ -82,6 +83,13 @@ if [ "$MODE" = "llmd" ]; then
   EXTRA_ARGS=(
     --vllm-router-ip "${MY_POD_IP}"
     --vllm-router-port 8081
+  )
+else
+  # vime default is cache_aware with balance_abs_threshold=10, which can
+  # send every generate to one worker. vime docs: set this to 0 to force
+  # even spread. llm-d does not use vllm-router, so this is native-only.
+  EXTRA_ARGS=(
+    --router-balance-abs-threshold 0
   )
 fi
 
