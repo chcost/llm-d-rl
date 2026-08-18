@@ -12,19 +12,19 @@ The loader imports pd_replica lazily (as verl's own built-in loaders do), so
 importing an EPP mode never drags vLLM in.
 
 In the run script:
-    actor_rollout_ref.model.external_lib=llm_d_rl_verl_integration.register_pd
+    actor_rollout_ref.model.external_lib=llm_d_rl_verl_bench.inproc_sidecar.register_pd
 """
 
 from verl.workers.rollout.base import _ROLLOUT_REGISTRY
 from verl.workers.rollout.replica import RolloutReplicaRegistry
 
 _ROLLOUT_REGISTRY[("vllm-llmd-pd", "async")] = (
-    "llm_d_rl_verl_integration.pd_replica.PDServerAdapter"
+    "llm_d_rl_verl_bench.inproc_sidecar.pd_replica.PDServerAdapter"
 )
 
 
 def _load_llmd_pd():
-    from llm_d_rl_verl_integration.pd_replica import PDEngineReplicaFactory
+    from llm_d_rl_verl_bench.inproc_sidecar.pd_replica import PDEngineReplicaFactory
     return PDEngineReplicaFactory
 
 

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-d-rl-verl-bench"
+version = "0.1.0"
+description = "Benchmark and research harness for the verl llm-d integration - not part of the integration"
+readme = "README.md"
+requires-python = ">=3.10"
+# Depends on the integration; the reverse must never be true. Provisioning
+# installs this only for benchmark runs, so an adopter's install stays small.
+dependencies = [
+    "llm-d-rl-verl-integration @ git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/verl",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["llm_d_rl_verl_bench*"]
+
+[tool.setuptools.package-data]
+# The research mode table, read by run_test.sh alongside the integration's own.
+"llm_d_rl_verl_bench" = ["modes-bench.yaml"]

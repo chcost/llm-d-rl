@@ -71,11 +71,27 @@ if ! python3 -c "import llm_d_rl_verl_integration.modes" 2>/dev/null; then
   fi
 fi
 
+# Two mode tables, same schema and same renderer: the integration ships the modes
+# that are part of it, and this harness ships the research ones, which need code
+# the integration does not contain (epp_dev/, inproc_sidecar/, native_logging/).
+# Try the integration's first, then ours.
+BENCH_MODES="$(python3 -c 'import llm_d_rl_verl_bench,pathlib;print(pathlib.Path(llm_d_rl_verl_bench.__file__).parent/"modes-bench.yaml")' 2>/dev/null || true)"
+
 # EPP_CONFIG is read by modes.py, so it needs no plumbing here.
-if ! MODE_OVERRIDES="$("${MODES_PY[@]}" "$MODE" 2>&1)"; then
-  echo "ERROR: $MODE_OVERRIDES" >&2
-  echo "       available modes:" >&2
-  "${MODES_PY[@]}" --list >&2
+if MODE_OVERRIDES="$("${MODES_PY[@]}" "$MODE" 2>/dev/null)"; then
+  :
+elif [[ -n "$BENCH_MODES" ]] && MODE_OVERRIDES="$("${MODES_PY[@]}" --modes-file "$BENCH_MODES" "$MODE" 2>/dev/null)"; then
+  :
+else
+  echo "ERROR: unknown mode '$MODE'" >&2
+  echo "       integration modes:" >&2
+  "${MODES_PY[@]}" --list 2>&1 | sed 's/^/         /' >&2
+  if [[ -n "$BENCH_MODES" ]]; then
+    echo "       benchmark modes:" >&2
+    "${MODES_PY[@]}" --modes-file "$BENCH_MODES" --list 2>&1 | sed 's/^/         /' >&2
+  else
+    echo "       (llm-d-rl-verl-bench is not installed, so no benchmark modes)" >&2
+  fi
   exit 1
 fi
 mapfile -t MODE_ARGS <<< "$MODE_OVERRIDES"

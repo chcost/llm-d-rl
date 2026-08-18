@@ -182,7 +182,7 @@ and `../../scripts/vllm_scrape.py` for vLLM-side metrics.
 | `epp-config-inflight-example.yaml` | a worked concurrency-cap config, kept as a reference for what `modifiers/cap.yaml` renders to. To sweep the cap, add a variant to `variants.yaml` and select it with `EPP_CONFIG` |
 
 The loop itself lives in the importable package at
-`src/llm_d_rl_verl_integration/trace_player/`. The in-flight producer +
+`quickstart/benchmarks/verl/src/llm_d_rl_verl_bench/trace_player/`. The in-flight producer +
 active-request-scorer EPP config and its concurrency-capped variant are
 workload-agnostic and are composed from `integrations/common/src/llm_d_rl_common/configs/epp/`
 (`profiles/inflight.yaml`, `modifiers/cap.yaml`); completion reporting is a flag

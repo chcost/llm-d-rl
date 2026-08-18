@@ -31,7 +31,7 @@ from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
 from verl.workers.rollout.replica import TokenOutput
 
-from llm_d_rl_verl_integration.trace_player.trace import nested_prompt_ids, parse_trace_turns
+from llm_d_rl_verl_bench.trace_player.trace import nested_prompt_ids, parse_trace_turns
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))

@@ -27,11 +27,11 @@ import ray
 from verl.workers.rollout.replica import TokenOutput
 from verl.workers.rollout.vllm_rollout.vllm_async_server import vLLMHttpServer, vLLMReplica
 
-from llm_d_rl_verl_integration.p2p_addressing import (
+from llm_d_rl_verl_bench.inproc_sidecar.p2p_addressing import (
     DEFAULT_P2P_CONNECTOR_PORT,
     p2p_listener_host,
 )
-from llm_d_rl_verl_integration.pd_replica import (
+from llm_d_rl_verl_bench.inproc_sidecar.pd_replica import (
     _SIDECAR_BINARY,
     _find_free_port,
     PDDecodeVLLMHttpServer,

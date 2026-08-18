@@ -29,8 +29,28 @@ No verl source changes are required - the whole integration is a single Hydra ov
 - **llm-d serving** - verl speaks HTTP to a single Envoy endpoint; Envoy + EPP pick a replica and
   forward to it. Closer to a production llm-d serving deployment.
 
-Both need no verl patches, and both support prefill/decode (PD) disaggregation. See
-[`docs/architecture.md`](docs/architecture.md).
+Both need no verl patches. See [`docs/architecture.md`](docs/architecture.md), and
+[`docs/configuration.md`](docs/configuration.md) for the exact overrides each mode
+needs (generated from the package's own mode table, so it cannot drift).
+
+### PD and P2P KV-cache sharing are experimental, and not in this package
+
+In a production llm-d deployment **EPP decides** which peer holds a reusable
+prefix and **the routing sidecar injects** the resulting `kv_transfer_params`.
+This integration does neither: it tells EPP which endpoints are prefill and which
+are decode (role-tagged endpoint discovery) and dispatches where EPP says.
+
+What this repo has beyond that is a research harness, not an integration: it
+prototypes EPP's placement decisions in Python and stands in for the sidecar
+in-process, because our benchmark topology runs many engines as Ray actors inside
+one pod and so has no sidecar container. That code lives in
+[`quickstart/benchmarks/verl`](../../quickstart/benchmarks/verl/) under
+`epp_dev/` and `inproc_sidecar/`, with the modes that use it in
+[`MODES.md`](../../quickstart/benchmarks/verl/MODES.md).
+
+Treat PD and P2P as experimental here. If you want them in production, get them
+from EPP and the sidecar; if you want to measure or extend them, read the
+harness.
 
 ## Benchmarks
 

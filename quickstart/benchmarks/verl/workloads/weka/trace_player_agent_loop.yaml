@@ -4,4 +4,4 @@
 # registration is guaranteed under every routing mode: native / epp / epp-fc).
 # Mount this alongside the EPP configs at /etc/llmd-configs/ (see README).
 - name: trace_player
-  _target_: llm_d_rl_verl_integration.trace_player.agent_loop.TracePlayerAgentLoop
+  _target_: llm_d_rl_verl_bench.trace_player.agent_loop.TracePlayerAgentLoop

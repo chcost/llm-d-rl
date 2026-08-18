@@ -6,4 +6,4 @@ Importing this package registers the ``trace_player`` agent loop via the
 init regardless of routing mode (native / epp / epp-fc).
 """
 
-from llm_d_rl_verl_integration.trace_player import agent_loop  # noqa: F401  (triggers @register)
+from llm_d_rl_verl_bench.trace_player import agent_loop  # noqa: F401  (triggers @register)

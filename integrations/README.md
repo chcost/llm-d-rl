@@ -10,6 +10,8 @@ integrations/
                                       launcher (in-process actor + CLI), reqlog,
                                       and the shipped EPP / Envoy configs
   verl/      llm-d-rl-verl-integration    the verl adapter + its mode contract
+             (the benchmark and research harness is a separate package, in
+              quickstart/benchmarks/verl - nothing here depends on it)
   vime/      (no package - a flag plus the shared shim is the whole integration)
   slime/     (same)
 ```
@@ -33,7 +35,10 @@ it does not proxy):
 - **llm-d serving** - the framework sends all generation to one Envoy endpoint;
   Envoy asks EPP and forwards. Closest to a production llm-d deployment.
 
-Both support prefill/decode disaggregation and P2P KV-cache sharing.
+Both tell EPP which endpoints are prefill and which are decode, so a PD
+deployment routes correctly. Beyond that, PD and P2P KV-cache sharing are
+**experimental** and their code is a research harness rather than part of these
+packages - see [`quickstart/benchmarks/verl`](../quickstart/benchmarks/verl/).
 
 ## Adopting it
 

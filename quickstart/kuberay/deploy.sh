@@ -224,6 +224,11 @@ provision() {
       K exec -n "$NAMESPACE" "$pod" -- rm -rf "$LLMD_LOCAL_SRC"
       K exec -n "$NAMESPACE" "$pod" -- mkdir -p "$LLMD_LOCAL_SRC"
       K cp "$FROM_LOCAL/integrations" "$NAMESPACE/$pod:$LLMD_LOCAL_SRC/" >/dev/null
+      # The benchmark harness is its own package under quickstart/, so a local
+      # provision needs that tree too.
+      K exec -n "$NAMESPACE" "$pod" -- mkdir -p "$LLMD_LOCAL_SRC/quickstart/benchmarks"
+      K cp "$FROM_LOCAL/quickstart/benchmarks/verl" \
+        "$NAMESPACE/$pod:$LLMD_LOCAL_SRC/quickstart/benchmarks/" >/dev/null
     fi
   done
 

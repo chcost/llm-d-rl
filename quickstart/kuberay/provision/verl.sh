@@ -45,6 +45,22 @@ llmd_require_module llm_d_rl_common
 llmd_install verl
 llmd_require_module llm_d_rl_verl_integration
 
+# --- the benchmark harness ----------------------------------------------------
+# Separate package (llm-d-rl-verl-bench) holding the research modes, the native
+# control arm, the trace player and the in-process sidecar stand-ins. Provisioning
+# installs it because this cluster exists to run benchmarks; an adopter installing
+# only the integration never pulls it. LLMD_BENCH=0 skips it.
+if [[ "${LLMD_BENCH:-1}" != "0" ]]; then
+  llmd_install_path="quickstart/benchmarks/verl"
+  if [[ "${LLMD_SOURCE:-git}" == "local" ]]; then
+    pip install --no-deps --no-cache-dir --force-reinstall "$LLMD_LOCAL_SRC/$llmd_install_path"
+  else
+    pip install --no-deps --no-cache-dir --force-reinstall \
+      "git+$LLMD_REPO@$LLMD_REPO_REF#subdirectory=$llmd_install_path"
+  fi
+  llmd_require_module llm_d_rl_verl_bench
+fi
+
 # --- the engine the image is supposed to provide -----------------------------
 llmd_require_module "$ENGINE_PY_MODULE"
 eval "MIN=\${ENGINE_${ENGINE_PY_MODULE}_MIN_VERSION:-}"
