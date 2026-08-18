@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy (or tear down) the slime KubeRay cluster using the single config in
 # deploy.env. Renders ray-cluster.yaml.tmpl with the image refs and namespace,
-# builds the llmd-epp-configs-slime ConfigMap from common/configs (envoy + burst
+# builds the llmd-epp-configs-slime ConfigMap from the configs shipped in llm-d-rl-common (envoy + burst
 # EPP with EPP_PARSER=sglanghttp-parser) plus this directory's run script.
 #
 # Usage:
@@ -39,7 +39,7 @@ fi
 # ${EPP_PARSER} becomes empty and EPP refuses to start (plugin '' missing type).
 export EPP_PARSER="${EPP_PARSER:-vllmhttp-parser}"
 
-COMMON_CONFIGS="$(cd ../../../common/configs && pwd)"
+COMMON_CONFIGS="$(cd ../../../common/src/llm_d_rl_common/configs && pwd)"
 
 render() {
   # Explicit var list prevents envsubst from expanding shell $-vars inside
@@ -49,7 +49,7 @@ render() {
 }
 
 create_configmap() {
-  # Burst EPP + Envoy live in integrations/common/configs/. Render the parser
+  # Burst EPP + Envoy live in integrations/common/src/llm_d_rl_common/configs/. Render the parser
   # name here (scoped envsubst — do not pass the RayCluster var list).
   local rendered
   rendered="$(mktemp)"

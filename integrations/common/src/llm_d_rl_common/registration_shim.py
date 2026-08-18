@@ -21,8 +21,14 @@ import logging
 import uuid
 from pathlib import Path
 
-import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+try:
+    import uvicorn
+    from fastapi import FastAPI, HTTPException, Request
+except ImportError as e:  # pragma: no cover - depends on how common was installed
+    raise ImportError(
+        "the registration shim needs an HTTP server: "
+        "pip install 'llm-d-rl-common[shim]' (fastapi + uvicorn)"
+    ) from e
 
 from llm_d_rl_common.endpoints import write_rollout_endpoints
 

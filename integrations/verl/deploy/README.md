@@ -113,9 +113,9 @@ worker, decode replicas launch the sidecar (PD only).
 Copy these starting-point configs (in this directory) to any path readable on the head node, edit as
 needed, and pass their paths as the Hydra overrides in step 5:
 
-- [`epp-config-burst.yaml`](../../common/configs/epp-config-burst.yaml) - EPP scorer config (standard / burst routing). Parser defaults to `vllmhttp-parser`.
+- [`epp-config-burst.yaml`](../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/epp-config-burst.yaml) - EPP scorer config (standard / burst routing). Parser defaults to `vllmhttp-parser`.
 - [`deploy/epp-config-pd.yaml`](epp-config-pd.yaml) - EPP scorer config (PD disaggregated)
-- [`envoy.yaml`](../../common/configs/envoy.yaml) - Envoy proxy config (llm-d serving mode only)
+- [`envoy.yaml`](../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/envoy.yaml) - Envoy proxy config (llm-d serving mode only)
 
 The EPP config's `file-discovery` plugin `path:` must match the `epp_endpoints_file` override -
 `LlmdActor` writes the replica list there and EPP reads it (default `/tmp/epp-endpoints.yaml`).
@@ -139,7 +139,7 @@ full commands for each mode.
 | Key | Required | Default | Description |
 |-----|----------|---------|-------------|
 | `rollout.agent.agent_loop_manager_class` | yes | - | `llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager` |
-| `rollout.custom.epp_config_file` | yes | - | Path to the EPP YAML config (plugin list, scorers). Start from `common/configs/epp-config-burst.yaml`. |
+| `rollout.custom.epp_config_file` | yes | - | Path to the EPP YAML config (plugin list, scorers). Start from `common/src/llm_d_rl_common/configs/epp-config-burst.yaml`. |
 | `rollout.custom.epp_endpoints_file` | yes | - | Path where the endpoints YAML is written; must match the `path` in the EPP config's `file-discovery` plugin |
 | `rollout.custom.epp_grpc_port` | no | `9002` | EPP gRPC ext_proc port |
 | `rollout.custom.epp_grpc_health_port` | no | `9003` | EPP gRPC health check port |
@@ -163,7 +163,7 @@ actor_rollout_ref.rollout.name=sglang \
 |-----|----------|---------|-------------|
 | `rollout.name` | yes | - | `sglang` |
 | `rollout.agent.agent_loop_manager_class` | yes | - | `llm_d_rl_verl_integration.llmd_epp_sglang.agent_loop_manager.SglangEPPRouterAgentLoopManager` |
-| `rollout.custom.epp_config_file` | yes | - | Path to the EPP YAML config. Start from `common/configs/epp-config-burst.yaml`. |
+| `rollout.custom.epp_config_file` | yes | - | Path to the EPP YAML config. Start from `common/src/llm_d_rl_common/configs/epp-config-burst.yaml`. |
 | `rollout.custom.epp_endpoints_file` | yes | - | Path where the endpoints YAML is written; each entry is labeled `llm-d.ai/engine-type: sglang` so EPP's metrics extractor uses the SGLang Prometheus metric mapping |
 | `rollout.custom.epp_grpc_port` | no | `9002` | EPP gRPC ext_proc port |
 | `rollout.custom.epp_grpc_health_port` | no | `9003` | EPP gRPC health check port |
@@ -182,7 +182,7 @@ actor_rollout_ref.rollout.name=sglang \
 | `rollout.agent.agent_loop_manager_class` | yes | - | `llm_d_rl_verl_integration.llmd_serving.agent_loop_manager.LlmdAgentLoopManager` |
 | `rollout.custom.epp_config_file` | yes | - | Path to the EPP YAML config |
 | `rollout.custom.epp_endpoints_file` | yes | - | Path where the endpoints YAML is written |
-| `rollout.custom.envoy_config` | yes | - | Path to the Envoy config YAML. Start from `common/configs/envoy.yaml`. |
+| `rollout.custom.envoy_config` | yes | - | Path to the Envoy config YAML. Start from `common/src/llm_d_rl_common/configs/envoy.yaml`. |
 | `rollout.custom.envoy_port` | no | `8081` | Envoy listener port |
 | `rollout.custom.epp_grpc_port` | no | `9002` | EPP gRPC ext_proc port |
 | `rollout.custom.epp_grpc_health_port` | no | `9003` | EPP gRPC health check port |

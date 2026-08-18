@@ -40,10 +40,10 @@ does not search `PATH`). Slime's EPP binary must include `sglanghttp-parser`.
 
 Copy these starting-point configs to any path readable on the head node:
 
-- [`epp-config-burst.yaml`](../../common/configs/epp-config-burst.yaml) — EPP
+- [`epp-config-burst.yaml`](../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/epp-config-burst.yaml) — EPP
   scorer pipeline (burst prefix-cache + load-aware). Render `EPP_PARSER` to
   `sglanghttp-parser`.
-- [`envoy-shim.yaml`](../../common/configs/envoy-shim.yaml) — Envoy listener
+- [`envoy-shim.yaml`](../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/envoy-shim.yaml) — Envoy listener
   (inference through EPP, `/workers*` to the shim)
 
 The EPP config's `file-discovery` plugin `path:` must match the `--endpoints-file` passed to `llm-d-registration-shim` (default `/tmp/epp-endpoints.yaml`).

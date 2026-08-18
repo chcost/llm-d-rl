@@ -55,11 +55,11 @@ set +a
 # An empty VERL_COMMIT would render a bare `git checkout`, which exits 0 and
 # leaves the clone on its default branch - a silently wrong verl version.
 : "${VERL_COMMIT:?not set - define it in deploy.env}"
-# EPP parser for common/configs/epp-config-burst.yaml.
+# EPP parser for common/src/llm_d_rl_common/configs/epp-config-burst.yaml.
 # Default is vllmhttp-parser; only slime overrides this.
 export EPP_PARSER="${EPP_PARSER:-vllmhttp-parser}"
 
-COMMON_CONFIGS="$(cd ../../../common/configs && pwd)"
+COMMON_CONFIGS="$(cd ../../../common/src/llm_d_rl_common/configs && pwd)"
 
 # Resolve the per-engine column from deploy.env into the names the manifest uses.
 # Fails fast on an engine with no column rather than rendering blank values into a

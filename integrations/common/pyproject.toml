@@ -11,6 +11,12 @@ requires-python = ">=3.10"
 dependencies = [
     "grpcio",
     "pyyaml",
+]
+
+[project.optional-dependencies]
+# Only llm-d-registration-shim needs an HTTP server. A framework that starts EPP
+# in-process (verl) never imports it, so it should not pull a web framework.
+shim = [
     "fastapi",
     "uvicorn",
 ]
@@ -25,3 +31,8 @@ llm-d-registration-shim = "llm_d_rl_common.registration_shim:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["llm_d_rl_common*"]
+
+[tool.setuptools.package-data]
+# The shipped routing configs are data inside the package, so pip install alone
+# is enough to get them (see llm_d_rl_common/configs/__init__.py).
+"llm_d_rl_common.configs" = ["*.yaml", "**/*.yaml", "**/*.env"]

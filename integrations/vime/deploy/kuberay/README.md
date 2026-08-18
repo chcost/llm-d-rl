@@ -36,7 +36,7 @@ bash deploy.sh apply
 ```
 
 This builds the `llmd-epp-configs-vime` ConfigMap from
-[`common/configs/`](../../../common/configs/) (`envoy-shim.yaml` and
+[`common/src/llm_d_rl_common/configs/`](../../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/) (`envoy-shim.yaml` and
 `epp-config-burst.yaml` with the default `vllmhttp-parser`) plus this
 directory's `run-qwen3-4B.sh`, and applies the rendered cluster manifest. The
 shim is `llm-d-registration-shim` from the common package that `postStart` pip-installs.
@@ -123,7 +123,7 @@ kubectl exec -n $NAMESPACE $HEAD -- tail -f /tmp/shim.log
 
 ## EPP config
 
-[`../../../common/configs/epp-config-burst.yaml`](../../../common/configs/epp-config-burst.yaml)
+[`../../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/epp-config-burst.yaml`](../../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/epp-config-burst.yaml)
 is the active config (parser defaults to `vllmhttp-parser`).
 To update it on a running cluster:
 

@@ -72,9 +72,9 @@ running pod without recreating it. See the [deployment guide](../README.md) for 
 ## Step 2 - Deploy
 
 `deploy.sh apply` does everything: it builds the `llmd-epp-configs` ConfigMap from
-[`common/configs/`](../../../common/configs/) (`epp-config-burst.yaml` with
+[`common/src/llm_d_rl_common/configs/`](../../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/) (`epp-config-burst.yaml` with
 `EPP_PARSER` filled in, default `vllmhttp-parser`)
-plus `common/configs/envoy.yaml` and this package's variants (`epp-config-pd.yaml`, p2p, inflight) and
+plus `common/src/llm_d_rl_common/configs/envoy.yaml` and this package's variants (`epp-config-pd.yaml`, p2p, inflight) and
 applies the rendered cluster manifest into `$NAMESPACE`.
 
 ```bash
@@ -275,7 +275,7 @@ bash /tmp/verl/verl/examples/grpo_trainer/run_qwen3_4b_fsdp.sh \
 
 ## EPP config
 
-[`../../../common/configs/epp-config-burst.yaml`](../../../common/configs/epp-config-burst.yaml)
+[`../../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/epp-config-burst.yaml`](../../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/epp-config-burst.yaml)
 (standard, parser defaults to `vllmhttp-parser`) and `../epp-config-pd.yaml`
 (PD disaggregated) are the starting-point configs. Customize scorer weights or swap plugins to tune routing for your workload.
 
