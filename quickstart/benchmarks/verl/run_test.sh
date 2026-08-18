@@ -62,11 +62,11 @@ fi
 # source tree so the driver works from a checkout too.
 MODES_PY=(python3 -m llm_d_rl_verl_integration.modes)
 if ! python3 -c "import llm_d_rl_verl_integration.modes" 2>/dev/null; then
-  SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../src" 2>/dev/null && pwd || true)"
+  SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../integrations/verl/src" 2>/dev/null && pwd || true)"
   if [[ -n "$SRC_DIR" ]]; then
     MODES_PY=(env "PYTHONPATH=$SRC_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -m llm_d_rl_verl_integration.modes)
   else
-    echo "ERROR: cannot find llm_d_rl_verl_integration.modes (not installed, no ../../src)" >&2
+    echo "ERROR: cannot find llm_d_rl_verl_integration.modes (not installed, and no integrations/verl/src)" >&2
     exit 1
   fi
 fi
@@ -99,12 +99,12 @@ fi
 # Adding a workload means adding a folder; this driver does not change.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Resolve the workloads dir: explicit WORKLOADS_DIR override, else the repo layout
-# (benchmarks/scripts -> ../workloads), else /tmp/workloads (where run_on_head.sh copies
-# the selected workload folder alongside run_test.sh on the head pod).
+# (this driver sits beside its own workloads/), else /tmp/workloads, where
+# run_on_head.sh copies the selected workload folder on the head pod.
 WORKLOADS_DIR="${WORKLOADS_DIR:-}"
 if [[ -z "$WORKLOADS_DIR" ]]; then
-  if [[ -d "$SCRIPT_DIR/../workloads" ]]; then
-    WORKLOADS_DIR="$(cd "$SCRIPT_DIR/../workloads" && pwd)"
+  if [[ -d "$SCRIPT_DIR/workloads" ]]; then
+    WORKLOADS_DIR="$(cd "$SCRIPT_DIR/workloads" && pwd)"
   elif [[ -d /tmp/workloads ]]; then
     WORKLOADS_DIR=/tmp/workloads
   fi
@@ -128,7 +128,7 @@ MODEL_RESOLVED=${MODEL_PATH:-$DEF_MODEL}
 # dies on it. Idempotent. SKIP_DCA_STRIP=1 disables. Falls back to /tmp/utils,
 # where run_on_head.sh ships the script.
 DCA_STRIP=""
-for cand in "$SCRIPT_DIR/utils/strip_dca_config.py" /tmp/utils/strip_dca_config.py; do
+for cand in "$SCRIPT_DIR/strip_dca_config.py" /tmp/utils/strip_dca_config.py; do
   [[ -f "$cand" ]] && DCA_STRIP="$cand" && break
 done
 if [[ "${SKIP_DCA_STRIP:-0}" != "1" && -n "$MODEL_RESOLVED" ]]; then
@@ -158,7 +158,7 @@ cd /tmp/verl/verl/examples/grpo_trainer
 # (catches the read and loops), so starting it before the engines are up is safe.
 # Set VLLM_SCRAPE_HOST when vLLM binds loopback (nosidecar P2P).
 SCRAPE_PID=""
-for cand in "$SCRIPT_DIR/vllm_scrape.py" /tmp/utils/vllm_scrape.py; do
+for cand in "$SCRIPT_DIR/../scripts/vllm_scrape.py" /tmp/utils/vllm_scrape.py; do
   if [[ -f "$cand" ]]; then
     rm -f "${VLLM_SCRAPE_OUT:-/tmp/vllm_metrics.csv}"
     nohup python3 "$cand" > /tmp/vllm_scrape.log 2>&1 &

@@ -67,6 +67,6 @@ cat <<EOF
 
 ==> Done. EPP is in place at $EPP_DEST (no verl rebuild, no pod recreation).
     Start / restart the verl run to pick it up (LlmdActor launches EPP once per
-    job). EPP config lives in the ConfigMap - rebuild it with deploy/deploy.sh
+    job). EPP config lives in the ConfigMap - rebuild it with kuberay/deploy.sh
     configmap and restart the run to change it.
 EOF

@@ -24,6 +24,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Which framework's driver to ship. Its benchmark dir is a sibling of this one.
+FRAMEWORK="${FRAMEWORK:-verl}"
+FW_DIR="$SCRIPT_DIR/../$FRAMEWORK"
+KUBERAY_DIR="$SCRIPT_DIR/../../kuberay"
 REMOTE_LOG="/tmp/train.log"
 
 # Namespace is per-user and comes from the environment. Mandatory, no default.
@@ -45,17 +49,29 @@ for arg in "$@"; do
   esac
 done
 
+# Provisioning is no longer part of pod startup, so pod Ready does not imply the
+# framework is installed. Refuse to launch on a fleet that is not provisioned, or
+# whose nodes disagree - a run on a half-provisioned cluster still produces a
+# plausible-looking number, which is exactly how bad results got recorded before.
+if [ -x "$KUBERAY_DIR/deploy.sh" ] && [ "${SKIP_PROVISION_CHECK:-0}" != "1" ]; then
+  echo "==> checking provisioning (SKIP_PROVISION_CHECK=1 to bypass)"
+  ( cd "$KUBERAY_DIR" && bash deploy.sh check --framework "$FRAMEWORK" ) || {
+    echo "ERROR: cluster is not provisioned - run: kuberay/deploy.sh provision --framework $FRAMEWORK" >&2
+    exit 1
+  }
+fi
+
 HEAD="$(kubectl get pod -n "$NS" -l ray.io/node-type=head \
   -o jsonpath='{.items[0].metadata.name}')"
 [ -n "$HEAD" ] || { echo "ERROR: no head pod (label ray.io/node-type=head) in namespace $NS" >&2; exit 1; }
 echo "==> head pod: $HEAD (namespace $NS)"
 
 echo "==> copying run_test.sh to $HEAD:/tmp/run_test.sh"
-kubectl cp "$SCRIPT_DIR/run_test.sh" "$NS/$HEAD:/tmp/run_test.sh"
+kubectl cp "$FW_DIR/run_test.sh" "$NS/$HEAD:/tmp/run_test.sh"
 
 # Ship the selected workload folder so run_test.sh can source workloads/<task>/task.env
 # on the pod (it falls back to /tmp/workloads when run from /tmp/run_test.sh).
-WLDIR="$SCRIPT_DIR/../workloads/$TASK"
+WLDIR="$FW_DIR/workloads/$TASK"
 if [ -d "$WLDIR" ]; then
   echo "==> copying workload '$TASK' to $HEAD:/tmp/workloads/$TASK"
   kubectl exec -n "$NS" "$HEAD" -- mkdir -p /tmp/workloads
@@ -65,10 +81,10 @@ else
 fi
 
 # Ship helper scripts run_test.sh calls on the pod (it falls back to /tmp/utils).
-if [ -d "$SCRIPT_DIR/utils" ]; then
-  echo "==> copying scripts/utils to $HEAD:/tmp/utils"
+if [ -f "$FW_DIR/strip_dca_config.py" ]; then
+  echo "==> copying strip_dca_config.py to $HEAD:/tmp/utils"
   kubectl exec -n "$NS" "$HEAD" -- mkdir -p /tmp/utils
-  kubectl cp "$SCRIPT_DIR/utils/strip_dca_config.py" "$NS/$HEAD:/tmp/utils/strip_dca_config.py"
+  kubectl cp "$FW_DIR/strip_dca_config.py" "$NS/$HEAD:/tmp/utils/strip_dca_config.py"
 fi
 # run_test.sh always starts the /metrics scraper; ship it to the same fallback dir.
 if [ -f "$SCRIPT_DIR/vllm_scrape.py" ]; then

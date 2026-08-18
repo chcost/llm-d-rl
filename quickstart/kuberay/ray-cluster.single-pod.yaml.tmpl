@@ -1,0 +1,174 @@
+# Topology: one pod, GPUs on the head. For frameworks whose driver needs a GPU
+# in-process (vime cannot run a CPU-only head; slime needs one to build the
+# Megatron torch_dist checkpoint that --ref-load wants).
+# One template per TOPOLOGY, not per framework - see the head-workers template.
+#
+# Nothing is installed at pod start; `deploy.sh provision` does that once the
+# cluster is up, and `deploy.sh check` verifies it.
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  rayVersion: '${RAY_VERSION}'
+
+  # Single-pod layout: head owns all GPUs. Avoids the two-pod split where
+  # vLLM's import-time CUDA check fails on a CPU-only head.
+
+  headGroupSpec:
+    rayStartParams:
+      num-cpus: "16"
+      num-gpus: "6"
+    template:
+      spec:
+        # EPP, Envoy and the KV sidecar are in none of the framework images. One
+        # crane init container extracts whichever of them this node needs into the
+        # llm-d-bins emptyDir. LLMD_BINS entries are dest=image::path-in-image.
+        # Bump a version in llm_d_rl_common/configs/versions.env and recreate the
+        # pod (push-epp.sh is the faster loop for EPP alone).
+        initContainers:
+        - name: fetch-llmd-bins
+          # Generic registry tool pinned by digest (go-containerregistry crane
+          # :debug, which ships /busybox/sh + /busybox/tar). Never rebuilt.
+          image: ${IMG_CRANE}
+          command: ["/busybox/sh", "-c"]
+          args:
+          - |
+            set -e
+            for spec in $LLMD_BINS; do
+              dest="${spec%%=*}"; rest="${spec#*=}"
+              img="${rest%%::*}"; path="${rest##*::}"
+              echo "extracting $path from $img -> /opt/llm-d-bins/$dest"
+              /ko-app/crane export --platform linux/amd64 "$img" - \
+                | /busybox/tar -xOf - "$path" > "/opt/llm-d-bins/$dest"
+              chmod +x "/opt/llm-d-bins/$dest"
+            done
+          env:
+          - name: LLMD_BINS
+            value: "epp=${IMG_EPP}::app/epp envoy=${IMG_ENVOY}::usr/local/bin/envoy"
+          volumeMounts:
+          - mountPath: /opt/llm-d-bins
+            name: llm-d-bins
+        containers:
+        - name: ray-head
+          image: ${IMG_TRAINER}
+          imagePullPolicy: Always
+          workingDir: /tmp
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            failureThreshold: 10
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 5
+          env:
+          - name: HOME
+            value: "/tmp"
+          - name: USER
+            value: "ray"
+          - name: PYTHONPATH
+            value: "${FW_PYTHONPATH}"
+          - name: MY_POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: HF_HOME
+            value: "${FW_HOME}/hf_cache"
+          - name: HF_DATASETS_CACHE
+            value: "${FW_HOME}/hf_cache/datasets"
+          - name: XDG_CACHE_HOME
+            value: "${FW_HOME}/hf_cache"
+          - name: HUGGINGFACE_HUB_CACHE
+            value: "${FW_HOME}/hf_cache"
+          - name: TRITON_CACHE_DIR
+            value: "/tmp/triton"
+          - name: FLASHINFER_WORKSPACE_DIR
+            value: "/tmp/flashinfer"
+          - name: TORCHINDUCTOR_CACHE_DIR
+            value: "/tmp/torch_inductor_cache"
+          - name: VLLM_TARGET_DEVICE
+            value: "cuda"   # a vLLM build-time hint; inert for other engines
+          - name: PYTORCH_CUDA_ALLOC_CONF
+            # Per-engine (ENGINE_<engine>_ALLOC_CONF in environments.env). vLLM's
+            # CuMemAllocator (sleep/wake) is incompatible with expandable_segments,
+            # so it must be False there. Empty is parsed by torch as no options.
+            value: "${ENGINE_ALLOC_CONF}"
+          - name: TOKENIZERS_PARALLELISM
+            value: "false"
+          - name: OMP_NUM_THREADS
+            value: "1"
+          - name: RAY_max_grpc_threads
+            value: "32"
+          - name: NCCL_DEBUG
+            value: "INFO"
+          - name: WANDB_MODE
+            value: "offline"
+          # --- EPP / Envoy binary paths (filled by the fetch-llmd-bins init container) ---
+          # Read by llm_d_rl_common.router_stack, which llm-d-rl-router uses to launch
+          # them; neither binary is baked into the image, so bumping IMG_EPP /
+          # IMG_ENVOY in deploy.env and recreating the pod is the whole upgrade path.
+          - name: LLMD_EPP_BINARY
+            value: "/opt/llm-d-bins/epp"
+          - name: LLMD_ENVOY_BINARY
+            value: "/opt/llm-d-bins/envoy"
+
+          # --- Router verbosity (default: quiet) ---
+          # See deploy/kuberay/README.md ## Increasing verbosity.
+          # - name: LLMD_EPP_VERBOSITY
+          #   value: "5"
+          # - name: LLMD_ENVOY_LOG_LEVEL
+          #   value: "debug"
+
+          resources:
+            limits:
+              cpu: "32"
+              memory: "256G"
+              nvidia.com/gpu: "6"
+            requests:
+              cpu: "16"
+              memory: "128G"
+              nvidia.com/gpu: "6"
+
+          ports:
+          - containerPort: 6379
+            name: gcs-server
+          - containerPort: 8265
+            name: dashboard
+          - containerPort: 10001
+            name: client
+          - containerPort: 8081
+            name: envoy
+
+          volumeMounts:
+          - mountPath: /opt/llm-d-bins
+            name: llm-d-bins
+          - mountPath: /dev/shm
+            name: dshm
+          - mountPath: /etc/llmd-configs
+            name: ${CONFIGMAP_NAME}
+            readOnly: true
+          - mountPath: /.cache
+            name: engine-cache
+          - mountPath: /.triton
+            name: triton-cache
+
+        volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "${DSHM_SIZE}"
+        - name: ${CONFIGMAP_NAME}
+          configMap:
+            name: ${CONFIGMAP_NAME}
+        - name: llm-d-bins
+          emptyDir: {}
+        - name: engine-cache
+          emptyDir: {}
+        - name: triton-cache
+          emptyDir: {}

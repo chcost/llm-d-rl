@@ -1,10 +1,20 @@
+# Topology: CPU-only head running the driver, plus a GPU worker group.
+#
+# One template per TOPOLOGY, not per framework: which framework runs here is
+# ${FRAMEWORK} plus ${IMG_TRAINER} plus a provisioning script, so adding a
+# framework costs no manifest.
+#
+# Nothing is installed at pod start. `deploy.sh provision` installs the framework
+# and the integration on every node once the cluster is up, so changing a
+# framework ref no longer needs a pod recreate. Pod Ready therefore means "Ray is
+# up", NOT "provisioned" - `deploy.sh check` verifies the latter.
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
-  name: verl-cluster
+  name: ${CLUSTER_NAME}
   namespace: ${NAMESPACE}
 spec:
-  rayVersion: '2.47.1'
+  rayVersion: '${RAY_VERSION}'
   headGroupSpec:
     rayStartParams:
       # Per-engine (ENGINE_HEAD_NUM_CPUS in deploy.env). vLLM: "4", so the driver can
@@ -23,14 +33,16 @@ spec:
             requiredDuringSchedulingIgnoredDuringExecution:
             - labelSelector:
                 matchLabels:
-                  ray.io/cluster: verl-cluster
+                  ray.io/cluster: ${CLUSTER_NAME}
                   ray.io/node-type: worker
               topologyKey: kubernetes.io/hostname
-        # EPP and Envoy are not in the verl image: this init container extracts them
-        # from their own images into llm-d-bins. To change either, bump its tag in
-        # deploy.env and recreate the pod (push-epp.sh is the faster EPP loop).
+        # EPP, Envoy and the KV sidecar are in none of the framework images. One
+        # crane init container extracts whichever of them this node needs into the
+        # llm-d-bins emptyDir. LLMD_BINS entries are dest=image::path-in-image.
+        # Bump a version in llm_d_rl_common/configs/versions.env and recreate the
+        # pod (push-epp.sh is the faster loop for EPP alone).
         initContainers:
-        - name: fetch-binaries
+        - name: fetch-llmd-bins
           # Generic registry tool pinned by digest (go-containerregistry crane
           # :debug, which ships /busybox/sh + /busybox/tar). Never rebuilt.
           image: ${IMG_CRANE}
@@ -38,17 +50,17 @@ spec:
           args:
           - |
             set -e
-            /ko-app/crane export --platform linux/amd64 "$EPP_IMAGE"   - | /busybox/tar -xOf - app/epp             > /opt/llm-d-bins/epp
-            /ko-app/crane export --platform linux/amd64 "$ENVOY_IMAGE" - | /busybox/tar -xOf - usr/local/bin/envoy > /opt/llm-d-bins/envoy
-            chmod +x /opt/llm-d-bins/epp /opt/llm-d-bins/envoy
+            for spec in $LLMD_BINS; do
+              dest="${spec%%=*}"; rest="${spec#*=}"
+              img="${rest%%::*}"; path="${rest##*::}"
+              echo "extracting $path from $img -> /opt/llm-d-bins/$dest"
+              /ko-app/crane export --platform linux/amd64 "$img" - \
+                | /busybox/tar -xOf - "$path" > "/opt/llm-d-bins/$dest"
+              chmod +x "/opt/llm-d-bins/$dest"
+            done
           env:
-          # Bump these tags (in deploy/deploy.env) to change the EPP / Envoy
-          # version a recreated pod boots with. Must be anonymously-pullable
-          # (public) images.
-          - name: EPP_IMAGE
-            value: "${IMG_EPP}"
-          - name: ENVOY_IMAGE
-            value: "${IMG_ENVOY}"
+          - name: LLMD_BINS
+            value: "epp=${IMG_EPP}::app/epp envoy=${IMG_ENVOY}::usr/local/bin/envoy pd-sidecar=${IMG_SIDECAR}::app/pd-sidecar"
           volumeMounts:
           - mountPath: /opt/llm-d-bins
             name: llm-d-bins
@@ -56,52 +68,6 @@ spec:
         - name: ray-head
           image: ${IMG_TRAINER} # engine-selected env image (IMG_VERL / IMG_VERL_SGLANG); one image covers native/epp/epp-p2p/PD
           imagePullPolicy: Always
-          lifecycle:
-            postStart:
-              exec:
-                command:
-                - /bin/bash
-                - -c
-                - |
-                  exec > /tmp/setup_log.txt 2>&1
-                  set -euo pipefail
-                  echo "Starting setup..."
-
-                  # PEP 668: the vLLM env image sets this in its own Dockerfile, the stock
-                  # verlai/verl:sgl* image does not, and Ubuntu 24.04 blocks system-wide pip
-                  # installs without it. Harmless where it is already set.
-                  export PIP_BREAK_SYSTEM_PACKAGES=1
-
-                  # Install verl at the ref from deploy.env's VERL_COMMIT. Echo the
-                  # resolved SHA: with a branch ref, head and workers clone at different
-                  # times and can land on different commits.
-                  git clone https://github.com/volcengine/verl.git /tmp/verl/verl
-                  cd /tmp/verl/verl && git checkout '${VERL_COMMIT}'
-                  echo "verl at $(git rev-parse HEAD) (requested '${VERL_COMMIT}')"
-                  pip install --no-deps -e /tmp/verl/verl
-
-                  # Common package first (the verl package depends on it). The import
-                  # checks make a silent empty install a hard postStart failure.
-                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/common"
-                  python3 -c "import llm_d_rl_common" || { echo "FATAL: common package not importable after install"; exit 1; }
-                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/verl"
-                  python3 -c "import llm_d_rl_verl_integration" || { echo "FATAL: integration package not importable after install"; exit 1; }
-                  python3 -c "import ${ENGINE_PY_MODULE}" || { echo "FATAL: ${ENGINE_PY_MODULE} not importable - wrong image for this engine?"; exit 1; }
-
-                  # Prepare data and prefetch the model.
-                  mkdir -p /tmp/verl/hf_cache/datasets
-
-                  # Pre-fetch model weights (tokenizer/config only on head)
-                  # flock: head and worker prefetch into the SAME PVC directory now, so
-                  # serialise them - huggingface_hub renames atomically but would
-                  # otherwise download the shared small files twice on a cold PVC.
-                  flock /tmp/verl/models/.hf-prefetch.lock python3 -c "
-                  from huggingface_hub import snapshot_download
-                  snapshot_download('Qwen/Qwen3-4B', local_dir='/tmp/verl/models/Qwen3-4B',
-                      ignore_patterns=['*.safetensors', '*.bin', '*.pt'],
-                      local_dir_use_symlinks=False)
-                  "
-                  echo "Setup complete" > /tmp/verl_ready.txt
           env:
           # --- Runtime paths ---
           - name: HOME
@@ -109,13 +75,13 @@ spec:
 
           # --- HuggingFace cache ---
           - name: HF_HOME
-            value: "/tmp/verl/hf_cache"
+            value: "${FW_HOME}/hf_cache"
           - name: HF_DATASETS_CACHE
-            value: "/tmp/verl/hf_cache/datasets"
+            value: "${FW_HOME}/hf_cache/datasets"
           - name: XDG_CACHE_HOME
-            value: "/tmp/verl/hf_cache"
+            value: "${FW_HOME}/hf_cache"
           - name: HUGGINGFACE_HUB_CACHE
-            value: "/tmp/verl/hf_cache"
+            value: "${FW_HOME}/hf_cache"
 
           # --- Compile / framework caches ---
           - name: TRITON_CACHE_DIR
@@ -131,9 +97,9 @@ spec:
           - name: VERL_LOGGING_LEVEL
             value: "INFO"
           - name: VERL_FILE_LOGGER_ROOT
-            value: "/tmp/verl/logs"
+            value: "${FW_HOME}/logs"
 
-          # --- EPP / Envoy binary paths (from the fetch-binaries init container) ---
+          # --- EPP / Envoy binary paths (from the fetch-llmd-bins init container) ---
           - name: VERL_EPP_BINARY
             value: "/opt/llm-d-bins/epp"
           - name: VERL_ENVOY_BINARY
@@ -193,33 +159,39 @@ spec:
           - mountPath: /dev/shm
             name: dshm
           - mountPath: /etc/llmd-configs
-            name: llmd-epp-configs
+            name: ${CONFIGMAP_NAME}
             readOnly: true
           # Durable cache (PVC): HF checkpoints and built parquet datasets survive a pod
           # recreate. Mounted AT the paths everything already uses, via subPath, so the
-          # 91 references to /tmp/verl/{models,data,hf_cache} across the workloads need
+          # references to ${FW_HOME}/{models,data,hf_cache} across the workloads need
           # no change - "fetch if missing, then reuse" is just snapshot_download's and
           # make_*.py's existing behaviour, now landing on durable storage.
-          - mountPath: /tmp/verl/models
-            name: verl-cache
+          - mountPath: ${FW_HOME}/models
+            name: ${PVC_NAME}
             subPath: models
-          - mountPath: /tmp/verl/data
-            name: verl-cache
+          - mountPath: ${FW_HOME}/data
+            name: ${PVC_NAME}
             subPath: data
-          - mountPath: /tmp/verl/hf_cache
-            name: verl-cache
+          - mountPath: ${FW_HOME}/hf_cache
+            name: ${PVC_NAME}
             subPath: hf_cache
+          # The framework clone lives here too, so every node installs the SAME
+          # commit instead of cloning independently and possibly landing on
+          # different ones - which a branch ref used to make possible.
+          - mountPath: ${FW_HOME}/code
+            name: ${PVC_NAME}
+            subPath: code
         volumes:
         - name: dshm
           emptyDir:
             medium: Memory
             sizeLimit: "32Gi"
-        - name: llmd-epp-configs
+        - name: ${CONFIGMAP_NAME}
           configMap:
-            name: llmd-epp-configs
-        - name: verl-cache
+            name: ${CONFIGMAP_NAME}
+        - name: ${PVC_NAME}
           persistentVolumeClaim:
-            claimName: verl-cache
+            claimName: ${PVC_NAME}
         # Shared scratch for the EPP/Envoy binaries; starts empty on a fresh pod.
         - name: llm-d-bins
           emptyDir: {}
@@ -250,10 +222,13 @@ spec:
                   operator: NotIn
                   values:
                   - excluded-node
-        # Extracts the pd-sidecar binary into llm-d-bins for the replicas to launch
-        # (VERL_SIDECAR_BINARY). Bump the tag in deploy.env and recreate to change.
+        # EPP, Envoy and the KV sidecar are in none of the framework images. One
+        # crane init container extracts whichever of them this node needs into the
+        # llm-d-bins emptyDir. LLMD_BINS entries are dest=image::path-in-image.
+        # Bump a version in llm_d_rl_common/configs/versions.env and recreate the
+        # pod (push-epp.sh is the faster loop for EPP alone).
         initContainers:
-        - name: fetch-sidecar
+        - name: fetch-llmd-bins
           # Generic registry tool pinned by digest (go-containerregistry crane
           # :debug, which ships /busybox/sh + /busybox/tar). Never rebuilt.
           image: ${IMG_CRANE}
@@ -261,13 +236,17 @@ spec:
           args:
           - |
             set -e
-            /ko-app/crane export --platform linux/amd64 "$SIDECAR_IMAGE" - | /busybox/tar -xOf - app/pd-sidecar > /opt/llm-d-bins/pd-sidecar
-            chmod +x /opt/llm-d-bins/pd-sidecar
+            for spec in $LLMD_BINS; do
+              dest="${spec%%=*}"; rest="${spec#*=}"
+              img="${rest%%::*}"; path="${rest##*::}"
+              echo "extracting $path from $img -> /opt/llm-d-bins/$dest"
+              /ko-app/crane export --platform linux/amd64 "$img" - \
+                | /busybox/tar -xOf - "$path" > "/opt/llm-d-bins/$dest"
+              chmod +x "/opt/llm-d-bins/$dest"
+            done
           env:
-          # Bump this tag (in deploy/deploy.env) to change the sidecar version a
-          # recreated pod boots with. Must be an anonymously-pullable (public) image.
-          - name: SIDECAR_IMAGE
-            value: "${IMG_SIDECAR}"
+          - name: LLMD_BINS
+            value: "epp=${IMG_EPP}::app/epp envoy=${IMG_ENVOY}::usr/local/bin/envoy pd-sidecar=${IMG_SIDECAR}::app/pd-sidecar"
           volumeMounts:
           - mountPath: /opt/llm-d-bins
             name: llm-d-bins
@@ -275,46 +254,6 @@ spec:
         - name: ray-worker
           image: ${IMG_TRAINER} # engine-selected env image (IMG_VERL / IMG_VERL_SGLANG); one image covers native/epp/epp-p2p/PD
           imagePullPolicy: Always
-          lifecycle:
-            postStart:
-              exec:
-                command:
-                - /bin/bash
-                - -c
-                - |
-                  exec > /tmp/setup_log.txt 2>&1
-                  set -euo pipefail
-                  # PEP 668: the vLLM env image sets this in its own Dockerfile, the stock
-                  # verlai/verl:sgl* image does not, and Ubuntu 24.04 blocks system-wide pip
-                  # installs without it. Harmless where it is already set.
-                  export PIP_BREAK_SYSTEM_PACKAGES=1
-
-                  # Install verl at the ref from deploy.env's VERL_COMMIT. Echo the
-                  # resolved SHA: with a branch ref, head and workers clone at different
-                  # times and can land on different commits.
-                  git clone https://github.com/volcengine/verl.git /tmp/verl/verl
-                  cd /tmp/verl/verl && git checkout '${VERL_COMMIT}'
-                  echo "verl at $(git rev-parse HEAD) (requested '${VERL_COMMIT}')"
-                  pip install --no-deps -e /tmp/verl/verl
-
-                  # Common package first (the verl package depends on it). The import
-                  # checks make a silent empty install a hard postStart failure.
-                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/common"
-                  python3 -c "import llm_d_rl_common" || { echo "FATAL: common package not importable after install"; exit 1; }
-                  pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/verl"
-                  python3 -c "import llm_d_rl_verl_integration" || { echo "FATAL: integration package not importable after install"; exit 1; }
-                  python3 -c "import ${ENGINE_PY_MODULE}" || { echo "FATAL: ${ENGINE_PY_MODULE} not importable - wrong image for this engine?"; exit 1; }
-                  mkdir -p /tmp/verl/hf_cache/datasets
-                  # Full model weights for FSDP training + vLLM rollout
-                  # flock: head and worker prefetch into the SAME PVC directory now, so
-                  # serialise them - huggingface_hub renames atomically but would
-                  # otherwise download the shared small files twice on a cold PVC.
-                  flock /tmp/verl/models/.hf-prefetch.lock python3 -c "
-                  from huggingface_hub import snapshot_download
-                  snapshot_download('Qwen/Qwen3-4B', local_dir='/tmp/verl/models/Qwen3-4B',
-                      local_dir_use_symlinks=False)
-                  "
-                  echo "Setup complete" > /tmp/verl_ready.txt
           env:
           # --- Runtime paths ---
           - name: HOME
@@ -322,13 +261,13 @@ spec:
 
           # --- HuggingFace cache ---
           - name: HF_HOME
-            value: "/tmp/verl/hf_cache"
+            value: "${FW_HOME}/hf_cache"
           - name: HF_DATASETS_CACHE
-            value: "/tmp/verl/hf_cache/datasets"
+            value: "${FW_HOME}/hf_cache/datasets"
           - name: XDG_CACHE_HOME
-            value: "/tmp/verl/hf_cache"
+            value: "${FW_HOME}/hf_cache"
           - name: HUGGINGFACE_HUB_CACHE
-            value: "/tmp/verl/hf_cache"
+            value: "${FW_HOME}/hf_cache"
 
           # --- Compile / framework caches ---
           - name: TRITON_CACHE_DIR
@@ -342,10 +281,10 @@ spec:
           - name: VERL_LOGGING_LEVEL
             value: "INFO"
 
-          # --- Sidecar binary path (filled by the fetch-sidecar init container) ---
-          # The sidecar is not baked into the verl image; fetch-sidecar extracts it
-          # from the separate sidecar image into /opt/llm-d-bins. Decode replicas
-          # launch whatever binary is here (PD mode only).
+          # --- Sidecar binary path (filled by the fetch-llmd-bins init container) ---
+          # The sidecar is in no framework image; fetch-llmd-bins extracts it from
+          # the separate sidecar image into /opt/llm-d-bins. Decode replicas launch
+          # whatever binary is here (PD mode), as does every replica in P2P mode.
           - name: VERL_SIDECAR_BINARY
             value: "/opt/llm-d-bins/pd-sidecar"
 
@@ -393,11 +332,11 @@ spec:
               # not a reservation: requests stay at 256G. Node allocatable is ~2014GiB
               # and every other pod on a GPU node here is a DaemonSet (~112GiB).
               memory: "1200G"
-              nvidia.com/gpu: "8"
+              nvidia.com/gpu: "${WORKER_GPUS}"
             requests:
               cpu: "48"
               memory: "256G"
-              nvidia.com/gpu: "8"
+              nvidia.com/gpu: "${WORKER_GPUS}"
             # --- Option B: 4 GPUs ---
             #  cpu: "32"
             #  memory: "128G"
@@ -412,26 +351,32 @@ spec:
           - mountPath: /dev/shm
             name: dshm
           - mountPath: /etc/llmd-configs
-            name: llmd-epp-configs
+            name: ${CONFIGMAP_NAME}
             readOnly: true
           # Durable cache (PVC): HF checkpoints and built parquet datasets survive a pod
           # recreate. Mounted AT the paths everything already uses, via subPath, so the
-          # 91 references to /tmp/verl/{models,data,hf_cache} across the workloads need
+          # references to ${FW_HOME}/{models,data,hf_cache} across the workloads need
           # no change - "fetch if missing, then reuse" is just snapshot_download's and
           # make_*.py's existing behaviour, now landing on durable storage.
-          - mountPath: /tmp/verl/models
-            name: verl-cache
+          - mountPath: ${FW_HOME}/models
+            name: ${PVC_NAME}
             subPath: models
-          - mountPath: /tmp/verl/data
-            name: verl-cache
+          - mountPath: ${FW_HOME}/data
+            name: ${PVC_NAME}
             subPath: data
-          - mountPath: /tmp/verl/hf_cache
-            name: verl-cache
+          - mountPath: ${FW_HOME}/hf_cache
+            name: ${PVC_NAME}
             subPath: hf_cache
+          # The framework clone lives here too, so every node installs the SAME
+          # commit instead of cloning independently and possibly landing on
+          # different ones - which a branch ref used to make possible.
+          - mountPath: ${FW_HOME}/code
+            name: ${PVC_NAME}
+            subPath: code
         volumes:
-        # Shared scratch: fetch-sidecar (init) extracts the sidecar binary here and
-        # decode replicas read it at /opt/llm-d-bins (VERL_SIDECAR_BINARY). Starts
-        # empty on a fresh pod.
+        # Shared scratch: fetch-llmd-bins (init) extracts the binaries here and
+        # replicas read them at /opt/llm-d-bins (VERL_SIDECAR_BINARY). Starts empty
+        # on a fresh pod.
         - name: llm-d-bins
           emptyDir: {}
         - name: dshm
@@ -444,10 +389,10 @@ spec:
             # so smaller cpu_bytes_to_use values need no manifest change - sweep them
             # with P2P_CPU_BYTES_TO_USE instead. NOTE: a leaked vllm_offload_*.mmap now
             # pins up to 72GiB, so clearing them between runs is mandatory, not hygiene.
-            sizeLimit: "640Gi"
-        - name: llmd-epp-configs
+            sizeLimit: "${DSHM_SIZE}"
+        - name: ${CONFIGMAP_NAME}
           configMap:
-            name: llmd-epp-configs
-        - name: verl-cache
+            name: ${CONFIGMAP_NAME}
+        - name: ${PVC_NAME}
           persistentVolumeClaim:
-            claimName: verl-cache
+            claimName: ${PVC_NAME}
