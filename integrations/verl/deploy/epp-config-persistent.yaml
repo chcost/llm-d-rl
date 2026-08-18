@@ -1,0 +1,62 @@
+# PERSISTENT prefix-cache EPP config (experiment arm).
+#
+# Identical to epp-config.yaml except the prefix-cache-scorer keeps its DEFAULT
+# persistent/approximate prefix source instead of being repointed at the burst
+# producer, and the burst producer is removed.
+#
+# Why: on the weka 64K multi-turn replay, the burst-only config measured 445.03s
+# vs 251.68s for the best wave-admission arm, with gen_mean 30.08 vs 16.24 - each
+# request ~2x slower, i.e. re-prefill, not queueing. The burst producer only sees a
+# 1000ms window, but a session's turns are seconds apart, so cross-turn affinity is
+# invisible to the scorer and EPP re-routes turn N+1 by load alone, discarding a 64K
+# context every turn. Burst grouping is forward-looking (what a rollout burst will
+# share); persistent is backward-looking (what is actually resident). Multi-turn
+# sessions need the latter.
+apiVersion: llm-d.ai/v1alpha1
+kind: EndpointPickerConfig
+
+plugins:
+  - name: file-discovery
+    type: file-discovery
+    parameters:
+      path: /tmp/epp-endpoints.yaml
+      watchFile: true
+
+  - name: prefix-cache-scorer
+    type: prefix-cache-scorer
+
+  - name: load-aware-scorer
+    type: load-aware-scorer
+
+  - name: max-score-picker
+    type: max-score-picker
+
+  - name: metrics-source
+    type: metrics-data-source
+
+  - name: metrics-extractor
+    type: core-metrics-extractor
+
+  - name: vllmhttp-parser
+    type: vllmhttp-parser
+
+requestHandler:
+  parsers:
+    - pluginRef: vllmhttp-parser
+
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: prefix-cache-scorer
+        weight: 2
+      - pluginRef: load-aware-scorer
+        weight: 1
+      - pluginRef: max-score-picker
+
+dataLayer:
+  discovery:
+    pluginRef: file-discovery
+  sources:
+    - pluginRef: metrics-source
+      extractors:
+        - pluginRef: metrics-extractor
