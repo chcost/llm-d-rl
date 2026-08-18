@@ -149,7 +149,11 @@ create_configmap() {
   # modifiers (configs/epp/variants.yaml), then EPP_PARSER substituted. Adding a
   # variant is a line in variants.yaml; this function does not change.
   export EPP_PARSER="${EPP_PARSER:-$LLMD_EPP_PARSER_DEFAULT}"
-  local dir; dir="$(mktemp -d)"; trap 'rm -rf "$dir"' RETURN
+  local dir; dir="$(mktemp -d)"
+  # Expanded now, not at return: a RETURN trap fires after `local dir` is out of
+  # scope, so "$dir" would be an unbound variable under set -u, and the trap's
+  # failure becomes this function's exit status.
+  trap "rm -rf '$dir'" RETURN
   local variants; variants="$(fw EPP_VARIANTS)"
   if [[ -n "$variants" ]]; then
     local v
@@ -183,6 +187,10 @@ create_configmap() {
 # retried.
 K() { timeout "${KUBECTL_TIMEOUT:-120}" kubectl "$@"; }
 
+# The pods have init containers, so kubectl picks one and says so on every call.
+# Name it instead: KubeRay calls them ray-head and ray-worker.
+container_for() { [[ "$1" == *-head-* ]] && echo ray-head || echo ray-worker; }
+
 pods_of_role() {
   K get pod -n "$NAMESPACE" -l "ray.io/node-type=$1" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true
@@ -191,7 +199,7 @@ pods_of_role() {
 exec_retry() {
   local pod="$1"; shift
   local n=0
-  until K exec -n "$NAMESPACE" -i "$pod" -- "$@"; do
+  until K exec -n "$NAMESPACE" -i -c "$(container_for "$pod")" "$pod" -- "$@"; do
     n=$((n+1)); [[ $n -ge 3 ]] && { echo "ERROR: exec failed 3x on $pod" >&2; return 1; }
     echo "  retrying on $pod ($n/3)" >&2; sleep 5
   done
@@ -218,16 +226,17 @@ provision() {
   local pod
   for pod in $all; do
     echo "==> shipping provision/ to $pod"
-    K exec -n "$NAMESPACE" "$pod" -- mkdir -p /tmp/llmd-provision
-    K cp provision "$NAMESPACE/$pod:/tmp/" >/dev/null
+    local c; c="$(container_for "$pod")"
+    K exec -n "$NAMESPACE" -c "$c" "$pod" -- mkdir -p /tmp/llmd-provision
+    K cp -c "$c" provision "$NAMESPACE/$pod:/tmp/" >/dev/null
     if [[ -n "$FROM_LOCAL" ]]; then
-      K exec -n "$NAMESPACE" "$pod" -- rm -rf "$LLMD_LOCAL_SRC"
-      K exec -n "$NAMESPACE" "$pod" -- mkdir -p "$LLMD_LOCAL_SRC"
-      K cp "$FROM_LOCAL/integrations" "$NAMESPACE/$pod:$LLMD_LOCAL_SRC/" >/dev/null
+      K exec -n "$NAMESPACE" -c "$c" "$pod" -- rm -rf "$LLMD_LOCAL_SRC"
+      K exec -n "$NAMESPACE" -c "$c" "$pod" -- mkdir -p "$LLMD_LOCAL_SRC"
+      K cp -c "$c" "$FROM_LOCAL/integrations" "$NAMESPACE/$pod:$LLMD_LOCAL_SRC/" >/dev/null
       # The benchmark harness is its own package under quickstart/, so a local
       # provision needs that tree too.
-      K exec -n "$NAMESPACE" "$pod" -- mkdir -p "$LLMD_LOCAL_SRC/quickstart/benchmarks"
-      K cp "$FROM_LOCAL/quickstart/benchmarks/verl" \
+      K exec -n "$NAMESPACE" -c "$c" "$pod" -- mkdir -p "$LLMD_LOCAL_SRC/quickstart/benchmarks"
+      K cp -c "$c" "$FROM_LOCAL/quickstart/benchmarks/verl" \
         "$NAMESPACE/$pod:$LLMD_LOCAL_SRC/quickstart/benchmarks/" >/dev/null
     fi
   done
@@ -250,11 +259,13 @@ check() {
   resolve
   local all; all="$(printf '%s\n%s\n' "$(pods_of_role head)" "$(pods_of_role worker)" | grep -v '^$' || true)"
   [[ -n "$all" ]] || { echo "ERROR: no pods for cluster $CLUSTER_NAME in $NAMESPACE" >&2; return 1; }
-  local pod json tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+  local pod json tmp; tmp="$(mktemp)"
+  # See create_configmap: expand at trap-definition time, not at return.
+  trap "rm -f '$tmp'" RETURN
   for pod in $all; do
     # The marker is pretty-printed on the pod for humans, so flatten it: this
     # goes into one tab-separated field per pod, and JSON ignores whitespace.
-    if json="$(K exec -n "$NAMESPACE" "$pod" -- cat /tmp/llmd-provisioned.json 2>/dev/null | tr -d '\n')"; then
+    if json="$(K exec -n "$NAMESPACE" -c "$(container_for "$pod")" "$pod" -- cat /tmp/llmd-provisioned.json 2>/dev/null | tr -d '\n')"; then
       printf '%s\t%s\n' "$pod" "$json" >> "$tmp"
     else
       printf '%s\t\n' "$pod" >> "$tmp"
