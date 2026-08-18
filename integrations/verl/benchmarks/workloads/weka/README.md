@@ -105,7 +105,7 @@ and `benchmarks/scripts/vllm_scrape.py` for vLLM-side metrics.
 | `make_weka.py` | traces.jsonl -> normalized trace-player parquet (self-contained) |
 | `task.env` | sets `default_agent_loop=trace_player` + `agent_loop_config_path` (loop only; router is `--mode`) |
 | `trace_player_agent_loop.yaml` | registers the `trace_player` loop (mount into /etc/llmd-configs) |
-| `epp-config-inflight-example.yaml` | example concurrency-cap config; copy and point `EPP_CAP_CONFIG` at your own variant to sweep |
+| `epp-config-inflight-example.yaml` | example concurrency-cap config; copy and point `EPP_CONFIG` at your own variant to sweep |
 
 The loop itself lives in the importable package at
 `src/llm_d_rl_verl_integration/trace_player/`. The in-flight producer +

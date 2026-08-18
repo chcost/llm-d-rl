@@ -62,6 +62,18 @@ ROLLOUT_NAME=""        # only epp-p2p sets this (registers a non-default rollout
 EXTERNAL_LIB=""        # only epp-p2p sets this (model.external_lib import hook)
 P2P_ENGINE_HYDRA=""    # only epp-p2p sets this (OffloadingConnector engine_kwargs)
 
+# -- EPP config selection ------------------------------------------------------
+# One EPP_CONFIG picks the scorer variant for every EPP-bearing mode; each mode
+# below supplies its own default. EPP_CAP_CONFIG (epp-fc) and EPP_P2P_CONFIG
+# (epp-p2p) were the old per-mode names: still honoured so existing sweep drivers
+# keep running unchanged, but deprecated. EPP_CONFIG wins if both are set.
+for _legacy in EPP_CAP_CONFIG EPP_P2P_CONFIG; do
+  if [[ -n "${!_legacy:-}" ]]; then
+    echo "WARNING: $_legacy is deprecated - use EPP_CONFIG (value honoured for now)" >&2
+    : "${EPP_CONFIG:=${!_legacy}}"
+  fi
+done
+
 # -- shared P2P engine config (--mode epp-p2p and wave-admission-p2p) ----------
 # spec_name + secondary_tiers are BOTH mandatory or there is no P2P tier and
 # remote_kv_source is silently ignored. Size cpu_bytes_to_use >= the per-replica
@@ -99,17 +111,17 @@ case "$MODE" in
     DEFAULT_NAME="qwen3_4b_grpo_eppinflight_tp${TP}_n${N}_${STEPS}s"
     [[ -z "$REQLOG" ]] && REQLOG="on"
     AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager"
-    EPP_CONFIG_FILE="epp-config-inflight.yaml"
+    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config-inflight.yaml}"
     EPP_REPORT_COMPLETION="true"
     ;;
 
   epp-fc)
     # EPP routing + a per-endpoint concurrency cap (flow control queues over-cap
-    # requests). Sweep the cap via EPP_CAP_CONFIG.
+    # requests). Sweep the cap via EPP_CONFIG.
     DEFAULT_NAME="qwen3_4b_grpo_eppfc_tp${TP}_n${N}_${STEPS}s"
     [[ -z "$REQLOG" ]] && REQLOG="on"
     AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager"
-    EPP_CONFIG_FILE="${EPP_CAP_CONFIG:-epp-config-inflight-cap.yaml}"
+    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config-inflight-cap.yaml}"
     EPP_REPORT_COMPLETION="true"
     ;;
 
@@ -151,7 +163,7 @@ case "$MODE" in
     DEFAULT_NAME="qwen3_4b_grpo_eppp2p_tp${TP}_n${N}_${STEPS}s"
     [[ -z "$REQLOG" ]] && REQLOG="on"
     AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager"
-    EPP_CONFIG_FILE="${EPP_P2P_CONFIG:-epp-config-p2p.yaml}"
+    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config-p2p.yaml}"
     ROLLOUT_NAME="vllm-llmd-p2p"
     EXTERNAL_LIB="llm_d_rl_verl_integration.register_p2p"
     P2P_ENGINE_HYDRA="${P2P_ENGINE_BASE}"
@@ -165,7 +177,7 @@ case "$MODE" in
     DEFAULT_NAME="qwen3_4b_grpo_eppsglang_tp${TP}_n${N}_${STEPS}s"
     [[ -z "$REQLOG" ]] && REQLOG="on"
     AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp_sglang.agent_loop_manager.SglangEPPRouterAgentLoopManager"
-    EPP_CONFIG_FILE="epp-config.yaml"
+    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config.yaml}"
     ROLLOUT_NAME="sglang"
     ;;
 
