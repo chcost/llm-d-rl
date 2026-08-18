@@ -106,7 +106,7 @@ kubectl exec -n $NS $H -- bash /tmp/benchmarks/scripts/run_test.sh --mode epp --
 ```
 
 The EPP config (plugins) is loaded from the file set by `rollout.custom.epp_config_file`.
-In k8s this is mounted from the `llmd-epp-configs` ConfigMap (built from `deploy/epp-config.yaml`
+In k8s this is mounted from the `llmd-epp-configs` ConfigMap (built from `common/configs/epp-config-burst.yaml`
 or `deploy/epp-config-pd.yaml` - see `deploy/kuberay/README.md` Step 2).
 
 ## 5. Clean + start scraper + launch (head)

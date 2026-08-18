@@ -1,13 +1,14 @@
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
-  name: vime-cluster
+  name: slime-cluster
   namespace: ${NAMESPACE}
 spec:
   rayVersion: '2.56.1'
 
   # Single-pod layout: head owns all GPUs. Avoids the two-pod split where
-  # vLLM's import-time CUDA check fails on a CPU-only head.
+  # the head has no GPU and cannot run convert_hf_to_torch_dist.py to produce
+  # the Megatron torch_dist checkpoint required by --ref-load.
 
   headGroupSpec:
     rayStartParams:
@@ -15,6 +16,11 @@ spec:
       num-gpus: "6"
     template:
       spec:
+        # EPP and Envoy are not in the slime image. The fetch-binaries init
+        # container pulls them from their separate (public) images using crane
+        # and extracts the binaries into the llm-d-bins emptyDir volume.
+        # Bump IMG_EPP / IMG_ENVOY in deploy.env to change versions without
+        # rebuilding the slime image.
         initContainers:
         - name: fetch-binaries
           image: ${IMG_CRANE}
@@ -36,9 +42,9 @@ spec:
 
         containers:
         - name: ray-head
-          image: ${IMG_VIME}
+          image: ${IMG_SLIME}   # slimerl/slime:<version> — see deploy.env
           imagePullPolicy: Always
-          workingDir: /tmp
+          workingDir: /tmp   # Ray multiprocessing.spawn restores cwd; /root may be permission-denied
           livenessProbe:
             tcpSocket:
               port: 6379
@@ -59,78 +65,65 @@ spec:
                 - -c
                 - |
                   exec > /tmp/setup_log.txt 2>&1
+                  export PATH="/tmp/.local/bin:$PATH"
+                  export PIP_BREAK_SYSTEM_PACKAGES=1
+                  echo "=== slime setup starting (background) ==="
+                  nohup bash -s >> /tmp/setup_log.txt 2>&1 <<'SETUP' &
                   set -euxo pipefail
                   export PATH="/tmp/.local/bin:$PATH"
-                  echo "=== vime setup ==="
-
-                  git clone --depth=1 https://github.com/vllm-project/vime.git /tmp/vime
-                  pip install --no-deps -e /tmp/vime
-
+                  export PIP_BREAK_SYSTEM_PACKAGES=1
+                  git clone --depth=1 https://github.com/THUDM/slime.git /tmp/slime-src
                   git clone --depth=1 -b core_v0.16.0 https://github.com/NVIDIA/Megatron-LM.git /tmp/Megatron-LM
                   mkdir -p /tmp/pyfix
                   printf 'import sys\nclass _S:\n def __init__(self,f):self._f=f\n def find_spec(self,*a,**k):\n  try:return self._f.find_spec(*a,**k)\n  except(PermissionError,OSError):return None\nsys.meta_path[:]=[_S(f) if "editable" in getattr(type(f),"__module__","") else f for f in sys.meta_path]\n' > /tmp/pyfix/sitecustomize.py
-
-                  # Install the common package (provides llm-d-rl-router and llm-d-registration-shim).
-                  # Fail loudly: set -e aborts before the ready marker if the install fails,
-                  # and the import check turns a silent empty install into a hard postStart
-                  # error (container restarts) instead of a pod that looks ready but is broken.
                   pip install --no-deps --no-cache-dir --force-reinstall "git+https://github.com/llm-d-incubation/llm-d-rl.git#subdirectory=integrations/common"
                   python3 -c "import llm_d_rl_common" || { echo "FATAL: common package not importable after install"; exit 1; }
                   command -v llm-d-rl-router > /dev/null || { echo "FATAL: llm-d-rl-router not on PATH after installing common"; exit 1; }
-
-                  # Pre-create empty endpoints file so EPP's file-discovery plugin
-                  # can watch it from the start (EPP crashes if the file is absent).
                   printf 'endpoints: []\n' > /tmp/epp-endpoints.yaml
-
-                  # llm-d-rl-router (llm_d_rl_common.cli, installed above) starts EPP
-                  # and Envoy with the flags the whole repo shares - including
-                  # --allow-experimental-plugins, which epp-config.yaml's
-                  # burst-prefix-cache-producer needs or EPP refuses to load the
-                  # config. It finds the crane-extracted binaries via
-                  # LLMD_EPP_BINARY / LLMD_ENVOY_BINARY (set in env below), waits for
-                  # each to accept connections, and exits if either one dies.
                   nohup llm-d-rl-router \
                     --epp-config /etc/llmd-configs/epp-config.yaml \
                     --envoy-config /etc/llmd-configs/envoy.yaml \
                     >> /tmp/router.log 2>&1 &
-
                   nohup llm-d-registration-shim \
-                    --engine-type vllm \
+                    --engine-type sglang --id-field id \
                     --host 127.0.0.1 --port 3001 \
                     --endpoints-file /tmp/epp-endpoints.yaml \
                     > /tmp/shim.log 2>&1 &
-
-                  # EPP/Envoy/shim are up. Model download and training are
-                  # handled by run-qwen3-4B.sh (run manually from the head pod).
-                  echo "Setup complete" > /tmp/vime_ready.txt
+                  echo "Setup complete" > /tmp/slime_ready.txt
+                  echo "=== setup done ==="
+                  SETUP
 
           env:
           - name: HOME
             value: "/tmp"
           - name: USER
             value: "ray"
-          - name: PYTHONPATH
-            value: "/tmp/pyfix:/tmp/Megatron-LM"
           - name: MY_POD_IP
             valueFrom:
               fieldRef:
                 fieldPath: status.podIP
+          - name: PYTHONPATH
+            value: "/tmp/pyfix:/tmp/slime-src:/tmp/Megatron-LM"
+
+          # --- HuggingFace cache ---
           - name: HF_HOME
-            value: "/tmp/vime/hf_cache"
+            value: "/tmp/slime/hf_cache"
           - name: HF_DATASETS_CACHE
-            value: "/tmp/vime/hf_cache/datasets"
+            value: "/tmp/slime/hf_cache/datasets"
           - name: XDG_CACHE_HOME
-            value: "/tmp/vime/hf_cache"
+            value: "/tmp/slime/hf_cache"
           - name: HUGGINGFACE_HUB_CACHE
-            value: "/tmp/vime/hf_cache"
+            value: "/tmp/slime/hf_cache"
+
+          # --- Compile / framework caches ---
           - name: TRITON_CACHE_DIR
             value: "/tmp/triton"
           - name: FLASHINFER_WORKSPACE_DIR
             value: "/tmp/flashinfer"
           - name: TORCHINDUCTOR_CACHE_DIR
             value: "/tmp/torch_inductor_cache"
-          - name: VLLM_TARGET_DEVICE
-            value: "cuda"
+
+          # --- SGLang / NCCL ---
           - name: TOKENIZERS_PARALLELISM
             value: "false"
           - name: OMP_NUM_THREADS
@@ -139,8 +132,11 @@ spec:
             value: "32"
           - name: NCCL_DEBUG
             value: "INFO"
-          - name: WANDB_MODE
-            value: "offline"
+
+          # CuMemAllocator (sglang sleep/wake) is incompatible with expandable_segments
+          - name: PYTORCH_CUDA_ALLOC_CONF
+            value: "expandable_segments:False"
+
           # --- EPP / Envoy binary paths (filled by the fetch-binaries init container) ---
           # Read by llm_d_rl_common.router_stack, which llm-d-rl-router uses to launch
           # them; neither binary is baked into the image, so bumping IMG_EPP /
@@ -149,6 +145,9 @@ spec:
             value: "/opt/llm-d-bins/epp"
           - name: LLMD_ENVOY_BINARY
             value: "/opt/llm-d-bins/envoy"
+
+          - name: WANDB_MODE
+            value: "offline"
 
           # --- Router verbosity (default: quiet) ---
           # See deploy/kuberay/README.md ## Increasing verbosity.
@@ -183,10 +182,10 @@ spec:
           - mountPath: /dev/shm
             name: dshm
           - mountPath: /etc/llmd-configs
-            name: llmd-epp-configs-vime
+            name: llmd-epp-configs-slime
             readOnly: true
           - mountPath: /.cache
-            name: vllm-cache
+            name: sglang-cache
           - mountPath: /.triton
             name: triton-cache
 
@@ -195,12 +194,12 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: "64Gi"
-        - name: llmd-epp-configs-vime
+        - name: llmd-epp-configs-slime
           configMap:
-            name: llmd-epp-configs-vime
+            name: llmd-epp-configs-slime
         - name: llm-d-bins
           emptyDir: {}
-        - name: vllm-cache
+        - name: sglang-cache
           emptyDir: {}
         - name: triton-cache
           emptyDir: {}

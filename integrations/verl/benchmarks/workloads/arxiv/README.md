@@ -80,5 +80,5 @@ python3 benchmarks/workloads/arxiv/make_arxiv.py --local_dir /tmp/verl/data/arxi
 benchmarks/scripts/run_test.sh --task arxiv --mode <native|epp> --steps 10
 ```
 
-The EPP arm needs `deploy/epp-config.yaml` with `windowDurationMs: 1000` + `balanceBy: tokens` and
+The EPP arm needs `common/configs/epp-config-burst.yaml` with `windowDurationMs: 1000` + `balanceBy: tokens` and
 the token-balanced EPP binary.

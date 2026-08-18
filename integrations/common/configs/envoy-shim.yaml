@@ -1,6 +1,11 @@
-# Envoy config for verl — mirrors the no-Kubernetes deployment guide.
-# Listener on :8081, ext_proc to EPP on localhost:9002, ORIGINAL_DST routing.
-# Source: https://github.com/llm-d/llm-d/blob/main/guides/no-kubernetes-deployment/router/envoy/envoy.yaml
+# Envoy config that routes registration paths (/workers*) to
+# llm-d-registration-shim on localhost:3001 (ext_proc disabled).
+# Used by vime and slime.
+#
+#   inference (/generate, /inference/v1/generate, /health*, ...)
+#     → ext_proc asks EPP, ORIGINAL_DST routes to the chosen engine
+#   registration (/workers*)
+#     → shim; the shim only writes /tmp/epp-endpoints.yaml
 
 admin:
   address:
@@ -10,7 +15,7 @@ admin:
 
 static_resources:
   listeners:
-    - name: vllm
+    - name: inference
       address:
         socket_address:
           address: 0.0.0.0
@@ -23,11 +28,20 @@ static_resources:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: http-8081
                 route_config:
-                  name: vllm
+                  name: inference
                   virtual_hosts:
-                    - name: vllm-default
+                    - name: inference-default
                       domains: ["*"]
                       routes:
+                        - match:
+                            prefix: "/workers"
+                          route:
+                            cluster: registration_shim
+                            timeout: 5s
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_proc:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+                              disabled: true
                         - match:
                             prefix: "/"
                           route:
@@ -98,6 +112,20 @@ static_resources:
             idle_timeout: 3s
           explicit_http_config:
             http_protocol_options: {}
+
+    # Registration shim - handles /workers*
+    - name: registration_shim
+      type: STATIC
+      connect_timeout: 5s
+      load_assignment:
+        cluster_name: registration_shim
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 3001
 
     - name: ext_proc
       type: STATIC

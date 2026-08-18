@@ -1,11 +1,11 @@
-# Deploying vime on KubeRay
+# Deploying slime on KubeRay
 
-Step-by-step guide for deploying the vime + llm-d cluster and running training. For architecture and how the routing stack works, see [../../README.md](../../README.md).
+Step-by-step guide for deploying the slime + llm-d cluster and running training. For architecture and how the routing stack works, see [../../README.md](../../README.md).
 
 ## Prerequisites
 
 - Kubernetes cluster with GPU nodes (6 GPUs on a single node for the Qwen3-4B example)
-- KubeRay operator installed (see [setting-kuberay.md](../../../verl/deploy/kuberay/setting-kuberay.md).
+- KubeRay operator installed (see [setting-kuberay.md](../../../verl/deploy/kuberay/setting-kuberay.md) — the operator install is framework-agnostic)
 - `envsubst` and `kubectl` on your PATH
 
 ## Step 1 — Configure
@@ -19,12 +19,12 @@ Images are defined in `deploy.env` — edit tags there rather than in the manife
 
 | Variable | Image |
 |---|---|
-| `IMG_VIME` | `inferactinc/public:vime-latest` |
+| `IMG_SLIME` | `slimerl/slime:latest` |
 | `IMG_CRANE` | `gcr.io/go-containerregistry/crane@sha256:1b1fb24d2b1bb27a9daf81a588157e68463876904e8e537a812edba6284fb252` |
-| `IMG_EPP` | `ghcr.io/llm-d/llm-d-router-endpoint-picker-dev:95625abeed826accc4dfa7903ef34a4d369830d8` (keep in step with the verl tree) |
+| `IMG_EPP` | `<epp-image-with-sglanghttp-parser>` (must include `sglanghttp-parser`) |
 | `IMG_ENVOY` | `docker.io/envoyproxy/envoy:distroless-v1.33.2` |
 
-EPP and Envoy are not in the vime image. The `fetch-binaries` init container on the head pod extracts them from their separate public images at pod start using crane. Update a binary without rebuilding by bumping its tag in `deploy.env` and recreating the pod.
+EPP and Envoy are not in the slime image. The `fetch-binaries` init container on the head pod extracts them from their separate public images at pod start using crane. Update a binary without rebuilding by bumping its tag in `deploy.env` and recreating the pod.
 
 If needed, adjust the manifest:
 - **GPU count** — `resources.limits.nvidia.com/gpu` defaults to 6; edit to match your node
@@ -35,9 +35,9 @@ If needed, adjust the manifest:
 bash deploy.sh apply
 ```
 
-This builds the `llmd-epp-configs-vime` ConfigMap from
+This builds the `llmd-epp-configs-slime` ConfigMap from
 [`common/configs/`](../../../common/configs/) (`envoy-shim.yaml` and
-`epp-config-burst.yaml` with the default `vllmhttp-parser`) plus this
+`epp-config-burst.yaml` rendered with `EPP_PARSER=sglanghttp-parser`) plus this
 directory's `run-qwen3-4B.sh`, and applies the rendered cluster manifest. The
 shim is `llm-d-registration-shim` from the common package that `postStart` pip-installs.
 
@@ -59,10 +59,10 @@ HEAD=$(kubectl get pod -n "$NAMESPACE" -l ray.io/node-type=head -o jsonpath='{.i
 kubectl exec -n $NAMESPACE $HEAD -- tail -f /tmp/setup_log.txt
 
 # Setup is done when this exists:
-kubectl exec -n $NAMESPACE $HEAD -- test -f /tmp/vime_ready.txt && echo "ready"
+kubectl exec -n $NAMESPACE $HEAD -- test -f /tmp/slime_ready.txt && echo "ready"
 ```
 
-PostStart completes when vime is installed and llm-d routing is running. Model download and weight conversion happen in the next step.
+PostStart completes when slime + Megatron-LM are cloned and llm-d routing is running. Model download and weight conversion happen in the next step.
 
 ## Step 4 — Health check (optional)
 
@@ -89,14 +89,16 @@ Exec into the head pod and run the training script:
 ```bash
 kubectl exec -it -n "$NAMESPACE" "$HEAD" -- bash
 
-# Run with llm-d routing:
-bash /etc/llmd-configs/run-qwen3-4B.sh --llmd
+# Inside the head pod:
 
-# Run native training (vllm router)
-bash /etc/llmd-configs/run-qwen3-4B.sh --native
+# Run with llm-d routing:
+bash /etc/llmd-configs/run-qwen3-4B.sh --mode llm-d
+
+# Run with native with slime's built-in sglang-router
+bash /etc/llmd-configs/run-qwen3-4B.sh --mode native
 ```
 
-The script downloads Qwen3-4B and the dapo-math-17k dataset, converts weights to Megatron format (once, skipped on re-runs), then submits the Ray job.
+The script downloads Qwen3-4B, converts weights to Megatron format (once, skipped on re-runs), then submits the Ray job.
 
 To stop a running job:
 ```bash
@@ -108,12 +110,13 @@ ray job stop <job-id> --address=http://127.0.0.1:8265 # graceful stop
 
 | File | Component |
 |---|---|
-| `/tmp/setup_log.txt` | postStart setup (vime install, service startup) |
+| `/tmp/setup_log.txt` | postStart setup (slime + Megatron clone, service startup) |
 | `/tmp/epp.log` | EPP |
 | `/tmp/envoy.log` | Envoy |
 | `/tmp/router.log` | `llm-d-rl-router` itself (startup, readiness, child exits) |
 | `/tmp/shim.log` | Registration shim |
 | `/tmp/ray/session_latest/logs/job-driver-<job_id>.log` | training logs |
+| `/tmp/ray/session_latest/logs/worker-*.out` | SGLang engine output |
 
 ```bash
 kubectl exec -n $NAMESPACE $HEAD -- tail -f /tmp/epp.log
@@ -124,7 +127,7 @@ kubectl exec -n $NAMESPACE $HEAD -- tail -f /tmp/shim.log
 ## EPP config
 
 [`../../../common/configs/epp-config-burst.yaml`](../../../common/configs/epp-config-burst.yaml)
-is the active config (parser defaults to `vllmhttp-parser`).
+is the active config (slime sets `EPP_PARSER=sglanghttp-parser` in `deploy.env`).
 To update it on a running cluster:
 
 ```bash
