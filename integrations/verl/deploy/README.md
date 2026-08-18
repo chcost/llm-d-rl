@@ -128,89 +128,21 @@ full commands for each mode.
 
 ## Hydra override reference
 
-### EPP as the endpoint picker
+The complete, per-mode reference lives in
+[`docs/configuration.md`](../docs/configuration.md), generated from
+`src/llm_d_rl_verl_integration/modes.yaml` - the same data the benchmark driver
+reads, so the two cannot drift. Print it for any mode without a checkout:
 
 ```bash
-+actor_rollout_ref.rollout.agent.agent_loop_manager_class=llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager \
-+actor_rollout_ref.rollout.custom.epp_config_file=/path/to/epp-config.yaml \
-+actor_rollout_ref.rollout.custom.epp_endpoints_file=/tmp/epp-endpoints.yaml
+llm-d-rl-verl-overrides --list          # every mode and what it does
+llm-d-rl-verl-overrides epp             # the overrides for one mode
+llm-d-rl-verl-overrides --markdown      # regenerate docs/configuration.md
 ```
 
-| Key | Required | Default | Description |
-|-----|----------|---------|-------------|
-| `rollout.agent.agent_loop_manager_class` | yes | - | `llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager` |
-| `rollout.custom.epp_config_file` | yes | - | Path to the EPP YAML config (plugin list, scorers). Start from `common/src/llm_d_rl_common/configs/epp-config-burst.yaml`. |
-| `rollout.custom.epp_endpoints_file` | yes | - | Path where the endpoints YAML is written; must match the `path` in the EPP config's `file-discovery` plugin |
-| `rollout.custom.epp_grpc_port` | no | `9002` | EPP gRPC ext_proc port |
-| `rollout.custom.epp_grpc_health_port` | no | `9003` | EPP gRPC health check port |
-| `rollout.custom.epp_pool_name` | no | `file-discovery` | EPP pool name |
-| `rollout.custom.epp_pool_namespace` | no | `default` | EPP pool namespace |
-
-### EPP as the endpoint picker, SGLang backend
-
-Same mode, SGLang replicas instead of vLLM. `rollout.name=sglang` is a verl **built-in**
-backend - no `model.external_lib` registration hook needed (unlike `vllm-llmd-pd` /
-`vllm-llmd-p2p` above, which this repo registers itself). No PD/P2P support for SGLang yet.
-
-```bash
-actor_rollout_ref.rollout.name=sglang \
-+actor_rollout_ref.rollout.agent.agent_loop_manager_class=llm_d_rl_verl_integration.llmd_epp_sglang.agent_loop_manager.SglangEPPRouterAgentLoopManager \
-+actor_rollout_ref.rollout.custom.epp_config_file=/path/to/epp-config.yaml \
-+actor_rollout_ref.rollout.custom.epp_endpoints_file=/tmp/epp-endpoints.yaml
-```
-
-| Key | Required | Default | Description |
-|-----|----------|---------|-------------|
-| `rollout.name` | yes | - | `sglang` |
-| `rollout.agent.agent_loop_manager_class` | yes | - | `llm_d_rl_verl_integration.llmd_epp_sglang.agent_loop_manager.SglangEPPRouterAgentLoopManager` |
-| `rollout.custom.epp_config_file` | yes | - | Path to the EPP YAML config. Start from `common/src/llm_d_rl_common/configs/epp-config-burst.yaml`. |
-| `rollout.custom.epp_endpoints_file` | yes | - | Path where the endpoints YAML is written; each entry is labeled `llm-d.ai/engine-type: sglang` so EPP's metrics extractor uses the SGLang Prometheus metric mapping |
-| `rollout.custom.epp_grpc_port` | no | `9002` | EPP gRPC ext_proc port |
-| `rollout.custom.epp_grpc_health_port` | no | `9003` | EPP gRPC health check port |
-
-### llm-d serving (Envoy + EPP)
-
-```bash
-+actor_rollout_ref.rollout.agent.agent_loop_manager_class=llm_d_rl_verl_integration.llmd_serving.agent_loop_manager.LlmdAgentLoopManager \
-+actor_rollout_ref.rollout.custom.epp_config_file=/path/to/epp-config.yaml \
-+actor_rollout_ref.rollout.custom.epp_endpoints_file=/tmp/epp-endpoints.yaml \
-+actor_rollout_ref.rollout.custom.envoy_config=/path/to/envoy.yaml
-```
-
-| Key | Required | Default | Description |
-|-----|----------|---------|-------------|
-| `rollout.agent.agent_loop_manager_class` | yes | - | `llm_d_rl_verl_integration.llmd_serving.agent_loop_manager.LlmdAgentLoopManager` |
-| `rollout.custom.epp_config_file` | yes | - | Path to the EPP YAML config |
-| `rollout.custom.epp_endpoints_file` | yes | - | Path where the endpoints YAML is written |
-| `rollout.custom.envoy_config` | yes | - | Path to the Envoy config YAML. Start from `common/src/llm_d_rl_common/configs/envoy.yaml`. |
-| `rollout.custom.envoy_port` | no | `8081` | Envoy listener port |
-| `rollout.custom.epp_grpc_port` | no | `9002` | EPP gRPC ext_proc port |
-| `rollout.custom.epp_grpc_health_port` | no | `9003` | EPP gRPC health check port |
-
-### PD disaggregation
-
-Add these on top of whichever mode you use. Use `deploy/epp-config-pd.yaml` as the EPP config;
-no separate image is needed - NIXL and the vLLM/verl patches PD needs are already baked into the
-standard `deploy/Dockerfile.verl.vllm-p2p` image (see "Nightly-vLLM environment image" above).
-
-```bash
-INFER_BACKEND=vllm-llmd-pd \
-actor_rollout_ref.rollout.disaggregation.prefill_replicas=<N> \
-actor_rollout_ref.rollout.disaggregation.decode_replicas=<N> \
-+actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector=NixlConnector \
-+actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_role=kv_both \
-+actor_rollout_ref.model.external_lib=llm_d_rl_verl_integration.register_pd
-```
-
-| Key | Required | Description |
-|-----|----------|-------------|
-| `rollout.name` | yes | `vllm-llmd-pd` |
-| `rollout.disaggregation.prefill_replicas` | yes | Prefill replica count; `prefill_replicas + decode_replicas == world_size / tp_size` |
-| `rollout.disaggregation.decode_replicas` | yes | Decode replica count (same constraint) |
-| `rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector` | yes | `NixlConnector` |
-| `rollout.engine_kwargs.vllm.kv_transfer_config.kv_role` | yes | `kv_both` |
-| `rollout.custom.sidecar_connector` | no | KV connector for `llm-d-routing-sidecar` (default `nixlv2`) |
-| `model.external_lib` | yes | `llm_d_rl_verl_integration.register_pd` - registers `vllm-llmd-pd` in FSDP worker processes |
+`EPP_CONFIG` selects a different EPP variant on any EPP-bearing mode; the shipped
+variants are listed in
+[`configs/epp/variants.yaml`](../../common/src/llm_d_rl_common/configs/epp/variants.yaml)
+and rendered with `llm-d-rl-epp-config render <variant>`.
 
 ## Observability
 

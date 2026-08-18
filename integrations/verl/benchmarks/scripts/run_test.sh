@@ -52,197 +52,47 @@ if [[ -z "$MODE" ]]; then
   exit 1
 fi
 
-# -- per-mode config -----------------------------------------------------------
-# Each branch only picks the manager class / EPP config; hydra overrides are
-# assembled once after the case statement.
-AGENT_LOOP_MANAGER_CLASS=""
-EPP_CONFIG_FILE=""
-EPP_REPORT_COMPLETION=""
-ROLLOUT_NAME=""        # only epp-p2p sets this (registers a non-default rollout backend)
-EXTERNAL_LIB=""        # only epp-p2p sets this (model.external_lib import hook)
-P2P_ENGINE_HYDRA=""    # only epp-p2p sets this (OffloadingConnector engine_kwargs)
-
-# -- EPP config selection ------------------------------------------------------
-# One EPP_CONFIG picks the scorer variant for every EPP-bearing mode; each mode
-# below supplies its own default. EPP_CAP_CONFIG (epp-fc) and EPP_P2P_CONFIG
-# (epp-p2p) were the old per-mode names: still honoured so existing sweep drivers
-# keep running unchanged, but deprecated. EPP_CONFIG wins if both are set.
-for _legacy in EPP_CAP_CONFIG EPP_P2P_CONFIG; do
-  if [[ -n "${!_legacy:-}" ]]; then
-    echo "WARNING: $_legacy is deprecated - use EPP_CONFIG (value honoured for now)" >&2
-    : "${EPP_CONFIG:=${!_legacy}}"
+# -- per-mode overrides -------------------------------------------------------
+# The mode matrix is data in the integration package (modes.yaml), not a case
+# statement here: an adopter running their own launcher needs the same contract,
+# and when it lived only in this driver the documented reference drifted from it
+# in both directions. This driver now consumes it.
+#
+# Prefer the installed package (that is what runs on the pod); fall back to the
+# source tree so the driver works from a checkout too.
+MODES_PY=(python3 -m llm_d_rl_verl_integration.modes)
+if ! python3 -c "import llm_d_rl_verl_integration.modes" 2>/dev/null; then
+  SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../src" 2>/dev/null && pwd || true)"
+  if [[ -n "$SRC_DIR" ]]; then
+    MODES_PY=(env "PYTHONPATH=$SRC_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -m llm_d_rl_verl_integration.modes)
+  else
+    echo "ERROR: cannot find llm_d_rl_verl_integration.modes (not installed, no ../../src)" >&2
+    exit 1
   fi
-done
-
-# -- shared P2P engine config (--mode epp-p2p and wave-admission-p2p) ----------
-# spec_name + secondary_tiers are BOTH mandatory or there is no P2P tier and
-# remote_kv_source is silently ignored. Size cpu_bytes_to_use >= the per-replica
-# GPU KV cache, capped by /dev/shm (see ray-cluster.yaml.tmpl's dshm sizeLimit).
-P2P_ENGINE_BASE="
-      +ray_kwargs.ray_init.runtime_env.env_vars.VERL_USE_EXTERNAL_MODULES=llm_d_rl_verl_integration.register_p2p \
-      +actor_rollout_ref.rollout.engine_kwargs.vllm.block_size=64 \
-      +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector=OffloadingConnector \
-      +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_role=kv_both \
-      +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector_extra_config.offload_prompt_only=false \
-      +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector_extra_config.cpu_bytes_to_use=${P2P_CPU_BYTES_TO_USE:-4294967296} \
-      +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector_extra_config.spec_name=TieringOffloadingSpec \
-      +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector_extra_config.secondary_tiers=[{type:p2p}]"
-
-case "$MODE" in
-  native)
-    DEFAULT_NAME="qwen3_4b_grpo_baseline_tp${TP}_n${N}_${STEPS}s"
-    [[ -z "$REQLOG" ]] && REQLOG="on"
-    # Stock native routing, plus reqlog + endpoints YAML for the scraper.
-    AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.native_logging.agent_loop_manager.NativeLoggingAgentLoopManager"
-    ;;
-
-  epp)
-    DEFAULT_NAME="qwen3_4b_grpo_epp_tp${TP}_n${N}_${STEPS}s"
-    [[ -z "$REQLOG" ]] && REQLOG="on"
-    AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager"
-    # EPP_CONFIG selects a scorer/producer variant from the llmd-epp-configs
-    # ConfigMap without touching the mode; default is the burst profile.
-    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config.yaml}"
-    ;;
-
-  epp-inflight)
-    # EPP routing on the in-flight counter, no cap. epp_report_completion keeps
-    # the stream open so the counter stays honest.
-    DEFAULT_NAME="qwen3_4b_grpo_eppinflight_tp${TP}_n${N}_${STEPS}s"
-    [[ -z "$REQLOG" ]] && REQLOG="on"
-    AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager"
-    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config-inflight.yaml}"
-    EPP_REPORT_COMPLETION="true"
-    ;;
-
-  epp-fc)
-    # EPP routing + a per-endpoint concurrency cap (flow control queues over-cap
-    # requests). Sweep the cap via EPP_CONFIG.
-    DEFAULT_NAME="qwen3_4b_grpo_eppfc_tp${TP}_n${N}_${STEPS}s"
-    [[ -z "$REQLOG" ]] && REQLOG="on"
-    AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager"
-    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config-inflight-cap.yaml}"
-    EPP_REPORT_COMPLETION="true"
-    ;;
-
-  wave-admission)
-    # Estimation-gated admission (no EPP), sticky after admit. Tunables via
-    # actor_rollout_ref.rollout.custom.wave_admission_* - see wave_admission/.
-    DEFAULT_NAME="qwen3_4b_grpo_waveadmission_tp${TP}_n${N}_${STEPS}s"
-    [[ -z "$REQLOG" ]] && REQLOG="on"
-    AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.wave_admission.agent_loop_manager.WaveAdmissionAgentLoopManager"
-    ;;
-
-  wave-admission-p2p)
-    # Wave-admission on the P2P backend: a migration pulls the resident's KV.
-    # The P2P tier deadlocks engine sleep(), so pass
-    # free_cache_engine=false via EXTRA_OVERRIDES to EVERY arm of a comparison.
-    DEFAULT_NAME="qwen3_4b_grpo_waveadmissionp2p_tp${TP}_n${N}_${STEPS}s"
-    [[ -z "$REQLOG" ]] && REQLOG="on"
-    AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.wave_admission.agent_loop_manager.WaveAdmissionAgentLoopManager"
-    ROLLOUT_NAME="vllm-llmd-p2p"
-    EXTERNAL_LIB="llm_d_rl_verl_integration.register_p2p"
-    P2P_ENGINE_HYDRA="${P2P_ENGINE_BASE} \
-      +actor_rollout_ref.rollout.custom.wave_admission_p2p_kv_available=true \
-      +actor_rollout_ref.rollout.custom.wave_admission_reserve_mode=size \
-      +actor_rollout_ref.rollout.custom.wave_admission_reserve_z=1.5 \
-      +actor_rollout_ref.rollout.custom.wave_admission_max_wait_s=${WAVE_ADMISSION_MAX_WAIT_S:-20}"
-    # Skip the sidecar and POST to vLLM's native endpoint. "enabled" not "true":
-    # Ray's runtime_env.env_vars rejects the bool Hydra infers from "true".
-    if [[ "${WAVE_ADMISSION_P2P_NOSIDECAR:-false}" == "true" ]]; then
-      P2P_ENGINE_HYDRA="${P2P_ENGINE_HYDRA} \
-      +ray_kwargs.ray_init.runtime_env.env_vars.VERL_P2P_NOSIDECAR=enabled \
-      +actor_rollout_ref.rollout.custom.wave_admission_p2p_nosidecar=true \
-      +actor_rollout_ref.rollout.custom.wave_admission_p2p_port=${WAVE_ADMISSION_P2P_PORT:-7777}"
-    fi
-    ;;
-
-  epp-p2p)
-    # P2P KV-cache sharing with EPP routing: a per-replica sidecar turns EPP's
-    # source header into kv_transfer_params. Same sleep() caveat as above.
-    DEFAULT_NAME="qwen3_4b_grpo_eppp2p_tp${TP}_n${N}_${STEPS}s"
-    [[ -z "$REQLOG" ]] && REQLOG="on"
-    AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager"
-    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config-p2p.yaml}"
-    ROLLOUT_NAME="vllm-llmd-p2p"
-    EXTERNAL_LIB="llm_d_rl_verl_integration.register_p2p"
-    P2P_ENGINE_HYDRA="${P2P_ENGINE_BASE}"
-    ;;
-
-  epp-sglang)
-    # EPP direct-gRPC routing with SGLang replicas instead of vLLM. rollout.name=sglang
-    # is a verl BUILT-IN backend (no register_pd.py-style import hook needed, unlike
-    # epp-p2p's vllm-llmd-p2p above). No PD/P2P for SGLang in this mode - see
-    # llmd_epp_sglang/agent_loop_manager.py.
-    DEFAULT_NAME="qwen3_4b_grpo_eppsglang_tp${TP}_n${N}_${STEPS}s"
-    [[ -z "$REQLOG" ]] && REQLOG="on"
-    AGENT_LOOP_MANAGER_CLASS="llm_d_rl_verl_integration.llmd_epp_sglang.agent_loop_manager.SglangEPPRouterAgentLoopManager"
-    EPP_CONFIG_FILE="${EPP_CONFIG:-epp-config.yaml}"
-    ROLLOUT_NAME="sglang"
-    ;;
-
-  llm-d)
-    echo "ERROR: --mode llm-d is not yet implemented"
-    exit 1
-    ;;
-
-  *)
-    echo "ERROR: unknown mode '${MODE}'. Choose: native | epp | epp-inflight | epp-fc | epp-p2p | epp-sglang | wave-admission | wave-admission-p2p | llm-d"
-    exit 1
-    ;;
-esac
-
-# Overrides common to every mode; epp_config_file only when the mode set one.
-# trainer.use_v1=true is mandatory: every llm-d manager subclasses verl's
-# AgentLoopManagerTQ, which only the v1 trainer drives correctly.
-EXTRA_HYDRA="
-  trainer.use_v1=true \
-  +actor_rollout_ref.rollout.agent.agent_loop_manager_class=${AGENT_LOOP_MANAGER_CLASS}"
-if [[ -n "$EPP_CONFIG_FILE" ]]; then
-  EXTRA_HYDRA="${EXTRA_HYDRA} \
-  +actor_rollout_ref.rollout.custom.epp_config_file=/etc/llmd-configs/${EPP_CONFIG_FILE}"
-  # LlmdActor (started by whichever Ray actor calls _on_servers_ready - verl's
-  # own unpinned TaskRunnerV1 driver, so this can be a GPU worker, not just the
-  # head) reads VERL_EPP_BINARY/VERL_ENVOY_BINARY/VERL_SIDECAR_BINARY from
-  # os.environ at import time. Ray's job-level runtime_env only guarantees
-  # env_vars explicitly listed here reach actors wherever they run - it does
-  # NOT fall back to the pod's own container env for actors spawned under a
-  # job that already set an explicit runtime_env. Forward whichever of these
-  # are actually set on this pod (empty/unset ones are omitted rather than
-  # forwarded as blank, so llmd_actor.py's own os.environ.get(...) defaults
-  # still apply when a binary genuinely isn't provided).
-  for v in VERL_EPP_BINARY VERL_ENVOY_BINARY VERL_SIDECAR_BINARY; do
-    if [[ -n "${!v:-}" ]]; then
-      EXTRA_HYDRA="${EXTRA_HYDRA} \
-  +ray_kwargs.ray_init.runtime_env.env_vars.${v}=${!v}"
-    fi
-  done
 fi
-if [[ -n "$EPP_REPORT_COMPLETION" ]]; then
-  EXTRA_HYDRA="${EXTRA_HYDRA} \
-  +actor_rollout_ref.rollout.custom.epp_report_completion=${EPP_REPORT_COMPLETION}"
+
+# EPP_CONFIG is read by modes.py, so it needs no plumbing here.
+if ! MODE_OVERRIDES="$("${MODES_PY[@]}" "$MODE" 2>&1)"; then
+  echo "ERROR: $MODE_OVERRIDES" >&2
+  echo "       available modes:" >&2
+  "${MODES_PY[@]}" --list >&2
+  exit 1
 fi
-if [[ -n "$ROLLOUT_NAME" ]]; then
-  EXTRA_HYDRA="${EXTRA_HYDRA} \
-  actor_rollout_ref.rollout.name=${ROLLOUT_NAME}"
-fi
-if [[ -n "$EXTERNAL_LIB" ]]; then
-  EXTRA_HYDRA="${EXTRA_HYDRA} \
-  +actor_rollout_ref.model.external_lib=${EXTERNAL_LIB}"
-fi
-if [[ -n "$P2P_ENGINE_HYDRA" ]]; then
-  EXTRA_HYDRA="${EXTRA_HYDRA} \
-  ${P2P_ENGINE_HYDRA}"
-fi
-EXTRA_HYDRA="${EXTRA_HYDRA} \
-  +actor_rollout_ref.rollout.custom.epp_endpoints_file=/tmp/epp-endpoints.yaml"
+mapfile -t MODE_ARGS <<< "$MODE_OVERRIDES"
+
+# Experiment name: the mode with its hyphens dropped, matching the names already
+# on disk in verl-results. "native" kept its historical "baseline" slug.
+if [[ "$MODE" == "native" ]]; then SLUG="baseline"; else SLUG="${MODE//-/}"; fi
+DEFAULT_NAME="qwen3_4b_grpo_${SLUG}_tp${TP}_n${N}_${STEPS}s"
+[[ -z "$REQLOG" ]] && REQLOG="on"
 
 EXPERIMENT_NAME="${CUSTOM_NAME:-$DEFAULT_NAME}"
 
 # -- reqlog override -----------------------------------------------------------
+# Where per-request JSONL goes. A driver concern (the integration only reads
+# VERL_REQLOG_DIR), so it is not in modes.yaml.
 if [[ "$REQLOG" == "on" ]]; then
-  EXTRA_HYDRA="
-  +ray_kwargs.ray_init.runtime_env.env_vars.VERL_REQLOG_DIR=/tmp/verl/reqlog${EXTRA_HYDRA}"
+  MODE_ARGS+=(+ray_kwargs.ray_init.runtime_env.env_vars.VERL_REQLOG_DIR=/tmp/verl/reqlog)
 fi
 
 # -- task config: sourced from workloads/<task>/task.env ------------------------
@@ -343,4 +193,5 @@ bash "$FSDP_SCRIPT" \
   ${TASK_OVERRIDES[@]+"${TASK_OVERRIDES[@]}"} \
   +actor_rollout_ref.rollout.engine_kwargs.vllm.enable_prompt_tokens_details=true \
   ${EXTRA_OV[@]+"${EXTRA_OV[@]}"} \
-  hydra.run.dir=/tmp/hydra-outputs${EXTRA_HYDRA}
+  hydra.run.dir=/tmp/hydra-outputs \
+  "${MODE_ARGS[@]}"

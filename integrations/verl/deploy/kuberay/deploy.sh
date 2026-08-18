@@ -52,6 +52,10 @@ set -a
 IMG_EPP="${IMG_EPP:-$LLMD_EPP_IMAGE}"
 IMG_ENVOY="${IMG_ENVOY:-$LLMD_ENVOY_IMAGE}"
 IMG_SIDECAR="${IMG_SIDECAR:-$LLMD_SIDECAR_IMAGE}"
+# Which environment image and framework ref go together - framework knowledge,
+# so it is declared with the integration rather than here.
+# shellcheck disable=SC1091
+. ../../environments.env
 # shellcheck disable=SC1091
 . ./deploy.env
 set +a

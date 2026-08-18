@@ -20,3 +20,11 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["llm_d_rl_verl_integration*"]
+
+[project.scripts]
+# Print the hydra overrides that turn the integration on for a given mode.
+llm-d-rl-verl-overrides = "llm_d_rl_verl_integration.modes:main"
+
+[tool.setuptools.package-data]
+# modes.yaml is the override contract; it must ship with the package.
+"llm_d_rl_verl_integration" = ["modes.yaml"]

@@ -26,8 +26,15 @@ set -a
 IMG_EPP="${IMG_EPP:-$LLMD_EPP_IMAGE}"
 IMG_ENVOY="${IMG_ENVOY:-$LLMD_ENVOY_IMAGE}"
 IMG_SIDECAR="${IMG_SIDECAR:-$LLMD_SIDECAR_IMAGE}"
+# Which environment image and framework ref go together - framework knowledge,
+# so it is declared with the integration rather than here.
+# shellcheck disable=SC1091
+. ../../environments.env
 # shellcheck disable=SC1091
 . ./deploy.env
+# The manifest names this framework's image; environments.env declares it as an
+# engine column, the same shape verl's --engine selection uses.
+IMG_VIME="${IMG_VIME:-$ENGINE_vllm_IMAGE}"
 set +a
 
 # NAMESPACE is per-user and comes from the environment, not deploy.env.
