@@ -1,0 +1,28 @@
+# Stamp the best-cached peer onto each request so the destination can pull its KV
+# instead of recomputing it (llm-d/llm-d PR #2067).
+#
+# p2p-source-producer sets x-kv-cache-source-host-port; the per-replica sidecar
+# reads that header and injects kv_transfer_params.remote_kv_source, so vLLM's
+# OffloadingConnector fetches the prefix from the peer's CPU tier. Needs
+# --mode epp-p2p (rollout.name=vllm-llmd-p2p) so each replica reports its
+# sidecar's port rather than vLLM's.
+#
+# On its own this uses EPP's default (approximate/persistent) prefix source, which
+# is what you want on a profile that has no prefix producer of its own - see
+# profiles/load-only.yaml. Add modifiers/p2p-from-burst.yaml to feed it the burst
+# producer's view instead.
+#
+# Known limitation, measured: on a burst profile the pull does not fire at all
+# (ext_hit 0.1%, zero sidecar protocol activity). A group's siblings dispatch in
+# the same window, so at dispatch time no replica holds the prefix yet - burst
+# grouping is prospective, P2P sourcing needs retrospective residency. Pair it
+# with load-only placement, or use the ledger path (wave-admission), to give it a
+# source that actually exists.
+plugins:
+  - name: p2p-source-producer
+    type: p2p-source-producer
+    parameters:
+      # The guide's measured RDMA crossover: only name a peer when it out-caches
+      # the serving pod by this many tokens, so a marginal advantage does not pay
+      # a pull's fixed cost for nothing.
+      minCachedTokenDelta: 2048

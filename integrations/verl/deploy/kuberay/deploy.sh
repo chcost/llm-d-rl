@@ -43,7 +43,15 @@ done
 cd "$(dirname "$0")"
 
 # deploy.env provides the IMG_* refs (envsubst reads them from the environment).
+# The routing stack's own versions ship beside the configs they belong to, so an
+# EPP config and the build that can load it stay one unit. Sourced FIRST, so
+# deploy.env below can override when a framework must (see versions.env).
 set -a
+# shellcheck disable=SC1091
+. ../../../common/src/llm_d_rl_common/configs/versions.env
+IMG_EPP="${IMG_EPP:-$LLMD_EPP_IMAGE}"
+IMG_ENVOY="${IMG_ENVOY:-$LLMD_ENVOY_IMAGE}"
+IMG_SIDECAR="${IMG_SIDECAR:-$LLMD_SIDECAR_IMAGE}"
 # shellcheck disable=SC1091
 . ./deploy.env
 set +a
@@ -60,6 +68,9 @@ set +a
 export EPP_PARSER="${EPP_PARSER:-vllmhttp-parser}"
 
 COMMON_CONFIGS="$(cd ../../../common/src/llm_d_rl_common/configs && pwd)"
+# Source tree of llm-d-rl-common, so the EPP config merger runs without the
+# package being installed on whoever is deploying.
+COMMON_SRC="$(cd ../../../common/src && pwd)"
 
 # Resolve the per-engine column from deploy.env into the names the manifest uses.
 # Fails fast on an engine with no column rather than rendering blank values into a
@@ -94,22 +105,24 @@ render_retriever() {
 }
 
 create_configmap() {
-  local rendered
-  rendered="$(mktemp)"
-  trap 'rm -f "$rendered"' RETURN
-  envsubst '${EPP_PARSER}' < "$COMMON_CONFIGS/epp-config-burst.yaml" > "$rendered"
+  # Every shipped EPP variant is base.yaml + one profiles/ file + any modifiers/
+  # (see configs/epp/variants.yaml); the merger renders them, then EPP_PARSER is
+  # substituted the same way it always was. Adding a variant is a line in
+  # variants.yaml - this function does not change.
+  local dir
+  dir="$(mktemp -d)"
+  trap 'rm -rf "$dir"' RETURN
+  PYTHONPATH="$COMMON_SRC" python3 -m llm_d_rl_common.epp_config render-all "$dir" >/dev/null
+  local epp_args=()
+  local f
+  for f in "$dir"/*.yaml; do
+    envsubst '${EPP_PARSER}' < "$f" > "$f.sub" && mv "$f.sub" "$f"
+    epp_args+=(--from-file="$(basename "$f")=$f")
+  done
   kubectl create configmap llmd-epp-configs \
-    --from-file=epp-config.yaml="$rendered" \
-    --from-file=epp-config-persistent.yaml=../epp-config-persistent.yaml \
-    --from-file=epp-config-p2p-spread.yaml=../epp-config-p2p-spread.yaml \
-    --from-file=epp-config-spread.yaml=../epp-config-spread.yaml \
-    --from-file=epp-config-p2p.yaml=../epp-config-p2p.yaml \
-    --from-file=epp-config-p2p-load.yaml=../epp-config-p2p-load.yaml \
-    --from-file=epp-config-pd.yaml=../epp-config-pd.yaml \
+    "${epp_args[@]}" \
     --from-file=envoy.yaml="$COMMON_CONFIGS/envoy.yaml" \
     --from-file=searchr1_tool_config.yaml=../../benchmarks/workloads/searchr1/tool_config.yaml \
-    --from-file=epp-config-inflight.yaml=../epp-config-inflight.yaml \
-    --from-file=epp-config-inflight-cap.yaml=../epp-config-inflight-cap.yaml \
     --from-file=trace_player_agent_loop.yaml=../../benchmarks/workloads/weka/trace_player_agent_loop.yaml \
     --namespace "$NAMESPACE" \
     --dry-run=client -o yaml | kubectl apply -f -

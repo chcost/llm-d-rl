@@ -1,16 +1,9 @@
-# Burst prefix-cache EPP config.
-# The request parser is the one integration-specific field. deploy.sh defaults
-# EPP_PARSER to vllmhttp-parser; only slime overrides it (sglanghttp-parser).
-apiVersion: llm-d.ai/v1alpha1
-kind: EndpointPickerConfig
-
+# Burst prefix-cache routing (the default profile).
+# Pipeline: parser -> burst-prefix-cache-producer -> prefix-cache-scorer.
+# prefix-cache-scorer (2) + load-aware-scorer (1) with max-score-picker, so the
+# burst producer's within-window group co-location wins over load balancing 2:1.
+# Mirrors the inference-scheduler burst sample.
 plugins:
-  - name: file-discovery
-    type: file-discovery
-    parameters:
-      path: /tmp/epp-endpoints.yaml
-      watchFile: true
-
   - name: prefix-cache-scorer
     type: prefix-cache-scorer
     parameters:
@@ -38,7 +31,8 @@ plugins:
     # is measurably too spread for one 100ms window.
     parameters:
       windowDurationMs: 1000
-      maxPerReplica: -1     # -1 = whole group to one replica (max co-location)
+      maxPerReplica: -1     # -1 = whole group to one replica (max co-location).
+                            # modifiers/spread.yaml sets this to 1.
       blockSizeTokens: 64   # prefix block size used for match length
       minColocateBlocks: 1  # min matching blocks required to co-locate a request
       maxBatchSize: 10000
@@ -50,22 +44,6 @@ plugins:
   - name: load-aware-scorer
     type: load-aware-scorer
 
-  - name: max-score-picker
-    type: max-score-picker
-
-  - name: metrics-source
-    type: metrics-data-source
-
-  - name: metrics-extractor
-    type: core-metrics-extractor
-
-  - name: ${EPP_PARSER}
-    type: ${EPP_PARSER}
-
-requestHandler:
-  parsers:
-    - pluginRef: ${EPP_PARSER}
-
 schedulingProfiles:
   - name: default
     plugins:
@@ -74,11 +52,3 @@ schedulingProfiles:
       - pluginRef: load-aware-scorer
         weight: 1
       - pluginRef: max-score-picker
-
-dataLayer:
-  discovery:
-    pluginRef: file-discovery
-  sources:
-    - pluginRef: metrics-source
-      extractors:
-        - pluginRef: metrics-extractor

@@ -1,15 +1,10 @@
-# llm-d EPP config for P/D disaggregation with VERL.
-
-apiVersion: llm-d.ai/v1alpha1
-kind: EndpointPickerConfig
-
+# Prefill/decode disaggregated routing.
+#
+# Shares only the chassis with the other profiles: it replaces the single
+# "default" scheduling profile with separate prefill and decode profiles, and
+# disagg-profile-handler decides which one a request takes. Requires
+# rollout.name=vllm-llmd-pd and the disaggregation.* replica counts.
 plugins:
-  - name: file-discovery
-    type: file-discovery
-    parameters:
-      path: /tmp/epp-endpoints.yaml
-      watchFile: true
-
   - name: queue-scorer
     type: queue-scorer
 
@@ -22,24 +17,16 @@ plugins:
   - name: no-hit-lru-scorer
     type: no-hit-lru-scorer
 
-  - name: metrics-source
-    type: metrics-data-source
-
-  - name: metrics-extractor
-    type: core-metrics-extractor
-
   - name: prefill-filter
     type: prefill-filter
 
   - name: decode-filter
     type: decode-filter
 
-  - name: max-score-picker
-    type: max-score-picker
-
   - name: prefix-based-pd-decider
     type: prefix-based-pd-decider
     parameters:
+      # Send to prefill only when this many prompt tokens are NOT already cached.
       nonCachedTokens: 16
 
   - name: disagg-profile-handler
@@ -47,13 +34,6 @@ plugins:
     parameters:
       deciders:
         prefill: prefix-based-pd-decider
-
-  - name: vllmhttp-parser
-    type: vllmhttp-parser
-
-requestHandler:
-  parsers:
-    - pluginRef: vllmhttp-parser
 
 schedulingProfiles:
   - name: prefill
@@ -66,7 +46,6 @@ schedulingProfiles:
         weight: 2
       - pluginRef: no-hit-lru-scorer
         weight: 2
-
   - name: decode
     plugins:
       - pluginRef: decode-filter
@@ -79,11 +58,3 @@ schedulingProfiles:
         weight: 2
       - pluginRef: no-hit-lru-scorer
         weight: 2
-
-dataLayer:
-  discovery:
-    pluginRef: file-discovery
-  sources:
-    - pluginRef: metrics-source
-      extractors:
-        - pluginRef: metrics-extractor

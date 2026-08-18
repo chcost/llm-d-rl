@@ -52,7 +52,7 @@ import ray
 from omegaconf import OmegaConf
 
 from llm_d_rl_verl_integration.base_agent_loop_manager import LlmdBaseAgentLoopManager
-from llm_d_rl_verl_integration.llmd_actor import LlmdActor
+from llm_d_rl_verl_integration.llmd_actor import LlmdActor, start_kwargs
 from llm_d_rl_verl_integration.llmd_epp.llm_client import EPPLLMClient
 from verl.workers.rollout.llm_server import LLMServerClient
 
@@ -125,13 +125,13 @@ class LlmdRouterAgentLoopManager(LlmdBaseAgentLoopManager):
         ).remote()
 
         self._grpc_addr = ray.get(
-            epp_actor.start.remote(
-                rollout_config=OmegaConf.to_container(rollout_cfg, resolve=True),
+            epp_actor.start.remote(**start_kwargs(
+                OmegaConf.to_container(rollout_cfg, resolve=True),
                 server_addresses=server_addresses,
                 model_config=OmegaConf.to_container(self.model_config, resolve=True),
                 server_roles=server_roles,
                 engine_type=self.engine_type,
-            )
+            ))
         )
         self._epp_actor = epp_actor
         logger.info("[%s] EPP ready at %s", type(self).__name__, self._grpc_addr)

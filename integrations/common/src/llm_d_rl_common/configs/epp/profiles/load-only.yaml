@@ -1,0 +1,14 @@
+# Load-only routing: no prefix awareness at all.
+#
+# Exists so destination picking is decoupled from cache locality, which is what
+# gives a P2P pull something to do - compose it with modifiers/p2p.yaml. Matches
+# upstream's epp-load-p2p.yaml arm.
+plugins:
+  - name: load-aware-scorer
+    type: load-aware-scorer
+
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: load-aware-scorer
+      - pluginRef: max-score-picker

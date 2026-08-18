@@ -22,7 +22,7 @@ import ray
 from omegaconf import OmegaConf
 
 from llm_d_rl_verl_integration.base_agent_loop_manager import LlmdBaseAgentLoopManager
-from llm_d_rl_verl_integration.llmd_actor import LlmdActor
+from llm_d_rl_verl_integration.llmd_actor import LlmdActor, start_kwargs
 from llm_d_rl_verl_integration.llmd_serving.llm_client import EnvoyLLMClient
 from verl.workers.rollout.llm_server import LLMServerClient
 from verl.workers.rollout.replica import RolloutReplicaRegistry
@@ -55,13 +55,13 @@ class LlmdAgentLoopManager(LlmdBaseAgentLoopManager):
         server_roles = self.infer_roles(server_addresses, rollout_cfg) if pd_mode else None
 
         self._envoy_address = ray.get(
-            self._stack_actor.start.remote(
+            self._stack_actor.start.remote(**start_kwargs(
+                OmegaConf.to_container(rollout_cfg, resolve=True),
                 server_addresses=server_addresses,
                 model_config=OmegaConf.to_container(self.model_config, resolve=True),
-                rollout_config=OmegaConf.to_container(rollout_cfg, resolve=True),
                 server_roles=server_roles,
                 with_envoy=True,
-            )
+            ))
         )
         logger.info("[LlmdAgentLoopManager] Envoy ready at %s", self._envoy_address)
 

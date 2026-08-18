@@ -20,6 +20,11 @@ shim = [
     "fastapi",
     "uvicorn",
 ]
+# Only llm_d_rl_common.ray_router imports ray. Frameworks that start the router
+# from a pod lifecycle hook (llm-d-rl-router) never touch it.
+ray = [
+    "ray",
+]
 
 [project.scripts]
 # Foreground EPP/Envoy launcher, for frameworks that start the router stack from
@@ -27,6 +32,9 @@ shim = [
 llm-d-rl-router = "llm_d_rl_common.cli:main"
 
 llm-d-registration-shim = "llm_d_rl_common.registration_shim:main"
+
+# Compose a shipped EPP config from base.yaml + a profile + modifiers.
+llm-d-rl-epp-config = "llm_d_rl_common.epp_config:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

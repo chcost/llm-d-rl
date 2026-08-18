@@ -1,0 +1,44 @@
+# EPP chassis: everything all routing profiles share, and nothing that picks a
+# routing policy. Compose it with exactly one file from profiles/ and any number
+# from modifiers/; variants.yaml names the combinations we ship.
+#
+# The request parser is the one integration-specific field here. deploy.sh
+# defaults EPP_PARSER to vllmhttp-parser; slime overrides it (sglanghttp-parser).
+# It stays a ${...} placeholder through the merge and is substituted afterwards,
+# so every variant is parser-selectable rather than only the burst one.
+apiVersion: llm-d.ai/v1alpha1
+kind: EndpointPickerConfig
+
+plugins:
+  # Endpoint discovery: the framework writes the replica list to this path and
+  # EPP watches it. Must match rollout.custom.epp_endpoints_file.
+  - name: file-discovery
+    type: file-discovery
+    parameters:
+      path: /tmp/epp-endpoints.yaml
+      watchFile: true
+
+  # Every shipped profile ends in a max-score pick.
+  - name: max-score-picker
+    type: max-score-picker
+
+  - name: metrics-source
+    type: metrics-data-source
+
+  - name: metrics-extractor
+    type: core-metrics-extractor
+
+  - name: ${EPP_PARSER}
+    type: ${EPP_PARSER}
+
+requestHandler:
+  parsers:
+    - pluginRef: ${EPP_PARSER}
+
+dataLayer:
+  discovery:
+    pluginRef: file-discovery
+  sources:
+    - pluginRef: metrics-source
+      extractors:
+        - pluginRef: metrics-extractor

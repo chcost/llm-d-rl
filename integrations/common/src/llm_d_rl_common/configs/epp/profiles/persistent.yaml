@@ -1,0 +1,33 @@
+# Persistent prefix-cache routing.
+#
+# Same shape as burst, except prefix-cache-scorer keeps its DEFAULT persistent /
+# approximate prefix source and there is no burst producer at all.
+#
+# Why it exists: on the weka 64K multi-turn replay the burst-only config measured
+# 445.03s against 251.68s for the best wave-admission arm, with gen_mean 30.08 vs
+# 16.24 - each request ~2x slower, i.e. re-prefill, not queueing. The burst window
+# is 1000ms but a session's turns are seconds apart, so cross-turn affinity is
+# invisible to the scorer and EPP re-routes turn N+1 by load alone, discarding a
+# 64K context every turn. Burst grouping is forward-looking (what a rollout burst
+# will share); persistent is backward-looking (what is actually resident).
+# Multi-turn sessions need the latter.
+#
+# Caveat on that comparison: it was measured at rollout.n=1, where the burst
+# producer has no duplicate samples to co-locate, so only its cost was active.
+# With real GRPO groups burst wins on per-request time. Do not read this as a
+# general burst-vs-persistent verdict.
+plugins:
+  - name: prefix-cache-scorer
+    type: prefix-cache-scorer
+
+  - name: load-aware-scorer
+    type: load-aware-scorer
+
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: prefix-cache-scorer
+        weight: 2
+      - pluginRef: load-aware-scorer
+        weight: 1
+      - pluginRef: max-score-picker

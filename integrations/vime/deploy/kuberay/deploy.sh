@@ -17,7 +17,15 @@ set -euo pipefail
 ACTION="${1:-apply}"
 cd "$(dirname "$0")"
 
+# The routing stack's own versions ship beside the configs they belong to, so an
+# EPP config and the build that can load it stay one unit. Sourced FIRST, so
+# deploy.env below can override when a framework must (see versions.env).
 set -a
+# shellcheck disable=SC1091
+. ../../../common/src/llm_d_rl_common/configs/versions.env
+IMG_EPP="${IMG_EPP:-$LLMD_EPP_IMAGE}"
+IMG_ENVOY="${IMG_ENVOY:-$LLMD_ENVOY_IMAGE}"
+IMG_SIDECAR="${IMG_SIDECAR:-$LLMD_SIDECAR_IMAGE}"
 # shellcheck disable=SC1091
 . ./deploy.env
 set +a
@@ -30,6 +38,9 @@ set +a
 export EPP_PARSER="${EPP_PARSER:-vllmhttp-parser}"
 
 COMMON_CONFIGS="$(cd ../../../common/src/llm_d_rl_common/configs && pwd)"
+# Source tree of llm-d-rl-common, so the EPP config merger runs without the
+# package being installed on whoever is deploying.
+COMMON_SRC="$(cd ../../../common/src && pwd)"
 
 render() {
   # Explicit var list prevents envsubst from expanding shell $-vars inside
@@ -39,10 +50,14 @@ render() {
 }
 
 create_configmap() {
+  # epp-config.yaml is the burst variant, merged from base.yaml +
+  # profiles/burst.yaml (configs/epp/variants.yaml); EPP_PARSER is substituted
+  # afterwards, as before.
   local rendered
   rendered="$(mktemp)"
   trap 'rm -f "$rendered"' RETURN
-  envsubst '${EPP_PARSER}' < "$COMMON_CONFIGS/epp-config-burst.yaml" > "$rendered"
+  PYTHONPATH="$COMMON_SRC" python3 -m llm_d_rl_common.epp_config render epp-config.yaml \
+    | envsubst '${EPP_PARSER}' > "$rendered"
   kubectl create configmap llmd-epp-configs-vime \
     --from-file=epp-config.yaml="$rendered" \
     --from-file=envoy.yaml="$COMMON_CONFIGS/envoy-shim.yaml" \
