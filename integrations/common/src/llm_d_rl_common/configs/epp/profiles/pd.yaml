@@ -1,0 +1,60 @@
+# Prefill/decode disaggregated routing.
+#
+# Shares only the chassis with the other profiles: it replaces the single
+# "default" scheduling profile with separate prefill and decode profiles, and
+# disagg-profile-handler decides which one a request takes. Requires
+# rollout.name=vllm-llmd-pd and the disaggregation.* replica counts.
+plugins:
+  - name: queue-scorer
+    type: queue-scorer
+
+  - name: kv-cache-utilization-scorer
+    type: kv-cache-utilization-scorer
+
+  - name: prefix-cache-scorer
+    type: prefix-cache-scorer
+
+  - name: no-hit-lru-scorer
+    type: no-hit-lru-scorer
+
+  - name: prefill-filter
+    type: prefill-filter
+
+  - name: decode-filter
+    type: decode-filter
+
+  - name: prefix-based-pd-decider
+    type: prefix-based-pd-decider
+    parameters:
+      # Send to prefill only when this many prompt tokens are NOT already cached.
+      nonCachedTokens: 16
+
+  - name: disagg-profile-handler
+    type: disagg-profile-handler
+    parameters:
+      deciders:
+        prefill: prefix-based-pd-decider
+
+schedulingProfiles:
+  - name: prefill
+    plugins:
+      - pluginRef: prefill-filter
+      - pluginRef: max-score-picker
+      - pluginRef: prefix-cache-scorer
+        weight: 3
+      - pluginRef: queue-scorer
+        weight: 2
+      - pluginRef: no-hit-lru-scorer
+        weight: 2
+  - name: decode
+    plugins:
+      - pluginRef: decode-filter
+      - pluginRef: max-score-picker
+      - pluginRef: prefix-cache-scorer
+        weight: 3
+      - pluginRef: queue-scorer
+        weight: 2
+      - pluginRef: kv-cache-utilization-scorer
+        weight: 2
+      - pluginRef: no-hit-lru-scorer
+        weight: 2

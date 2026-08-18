@@ -1,0 +1,21 @@
+# Route on EPP's own in-flight request counter instead of a prefix signal.
+#
+# Needs rollout.custom.epp_report_completion=true, which holds the routing stream
+# open for the whole generation so the counter reflects the real window rather
+# than a pick-time snapshot. Without it the counter is always ~0 and this profile
+# degrades to round-robin.
+plugins:
+  - name: inflight-load-producer
+    type: inflight-load-producer
+
+  - name: active-request-scorer
+    type: active-request-scorer
+    parameters:
+      inFlightLoadProducerName: inflight-load-producer
+
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: active-request-scorer
+        weight: 1
+      - pluginRef: max-score-picker

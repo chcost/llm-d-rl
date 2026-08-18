@@ -1,0 +1,8 @@
+# Feed p2p-source-producer the burst producer's PrefixCacheMatchInfo instead of
+# EPP's default approximate source - the same repointing prefix-cache-scorer does
+# in profiles/burst.yaml. Compose after modifiers/p2p.yaml, and only on a profile
+# that actually defines burst-prefix-cache-producer.
+plugins:
+  - name: p2p-source-producer
+    parameters:
+      prefixMatchInfoProducerName: burst-prefix-cache-producer

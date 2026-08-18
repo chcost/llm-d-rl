@@ -1,0 +1,7 @@
+# Extra files verl's benchmark driver needs mounted at /etc/llmd-configs on the
+# pod, as key=path pairs relative to quickstart/kuberay/. These are WORKLOAD
+# config, not routing config - they are listed here rather than in the shared
+# ConfigMap builder so a framework's benchmark needs do not leak into the
+# routing layer.
+searchr1_tool_config.yaml=../benchmarks/verl/workloads/searchr1/tool_config.yaml
+trace_player_agent_loop.yaml=../benchmarks/verl/workloads/weka/trace_player_agent_loop.yaml

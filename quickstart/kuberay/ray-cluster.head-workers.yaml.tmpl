@@ -1,0 +1,398 @@
+# Topology: CPU-only head running the driver, plus a GPU worker group.
+#
+# One template per TOPOLOGY, not per framework: which framework runs here is
+# ${FRAMEWORK} plus ${IMG_TRAINER} plus a provisioning script, so adding a
+# framework costs no manifest.
+#
+# Nothing is installed at pod start. `deploy.sh provision` installs the framework
+# and the integration on every node once the cluster is up, so changing a
+# framework ref no longer needs a pod recreate. Pod Ready therefore means "Ray is
+# up", NOT "provisioned" - `deploy.sh check` verifies the latter.
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  rayVersion: '${RAY_VERSION}'
+  headGroupSpec:
+    rayStartParams:
+      # Per-engine (ENGINE_HEAD_NUM_CPUS in deploy.env). vLLM: "4", so the driver can
+      # land here - the head has the RAM for the dataloader and the validation batch.
+      # SGLang: "0", so Ray never schedules a generic actor here - importing
+      # SGLangReplica needs libcuda.so.1 and crashes on this GPU-less node. EPP is
+      # unaffected either way: LlmdActor pins itself with NodeAffinity, not CPU
+      # scheduling, and asks for num_cpus=0.
+      num-cpus: "${ENGINE_HEAD_NUM_CPUS}"
+    template:
+      spec:
+        # Co-locate the head with the worker so EPP/Envoy routing stays on-node.
+        # One-directional (head -> worker) to avoid a scheduling deadlock.
+        affinity:
+          podAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  ray.io/cluster: ${CLUSTER_NAME}
+                  ray.io/node-type: worker
+              topologyKey: kubernetes.io/hostname
+        # EPP, Envoy and the KV sidecar are in none of the framework images. One
+        # crane init container extracts whichever of them this node needs into the
+        # llm-d-bins emptyDir. LLMD_BINS entries are dest=image::path-in-image.
+        # Bump a version in llm_d_rl_common/configs/versions.env and recreate the
+        # pod (push-epp.sh is the faster loop for EPP alone).
+        initContainers:
+        - name: fetch-llmd-bins
+          # Generic registry tool pinned by digest (go-containerregistry crane
+          # :debug, which ships /busybox/sh + /busybox/tar). Never rebuilt.
+          image: ${IMG_CRANE}
+          command: ["/busybox/sh", "-c"]
+          args:
+          - |
+            set -e
+            for spec in $LLMD_BINS; do
+              dest="${spec%%=*}"; rest="${spec#*=}"
+              img="${rest%%::*}"; path="${rest##*::}"
+              echo "extracting $path from $img -> /opt/llm-d-bins/$dest"
+              /ko-app/crane export --platform linux/amd64 "$img" - \
+                | /busybox/tar -xOf - "$path" > "/opt/llm-d-bins/$dest"
+              chmod +x "/opt/llm-d-bins/$dest"
+            done
+          env:
+          - name: LLMD_BINS
+            value: "epp=${IMG_EPP}::app/epp envoy=${IMG_ENVOY}::usr/local/bin/envoy pd-sidecar=${IMG_SIDECAR}::app/pd-sidecar"
+          volumeMounts:
+          - mountPath: /opt/llm-d-bins
+            name: llm-d-bins
+        containers:
+        - name: ray-head
+          image: ${IMG_TRAINER} # engine-selected env image (IMG_VERL / IMG_VERL_SGLANG); one image covers native/epp/epp-p2p/PD
+          imagePullPolicy: Always
+          env:
+          # --- Runtime paths ---
+          - name: HOME
+            value: "/tmp"
+
+          # --- HuggingFace cache ---
+          - name: HF_HOME
+            value: "${FW_HOME}/hf_cache"
+          - name: HF_DATASETS_CACHE
+            value: "${FW_HOME}/hf_cache/datasets"
+          - name: XDG_CACHE_HOME
+            value: "${FW_HOME}/hf_cache"
+          - name: HUGGINGFACE_HUB_CACHE
+            value: "${FW_HOME}/hf_cache"
+
+          # --- Compile / framework caches ---
+          - name: TRITON_CACHE_DIR
+            value: "/tmp/triton"
+          - name: FLASHINFER_WORKSPACE_DIR
+            value: "/tmp/flashinfer"
+
+          # --- Experiment tracking ---
+          - name: WANDB_MODE
+            value: "offline"
+
+          # --- verl logging ---
+          - name: VERL_LOGGING_LEVEL
+            value: "INFO"
+          - name: VERL_FILE_LOGGER_ROOT
+            value: "${FW_HOME}/logs"
+
+          # --- EPP / Envoy binary paths (from the fetch-llmd-bins init container) ---
+          - name: VERL_EPP_BINARY
+            value: "/opt/llm-d-bins/epp"
+          - name: VERL_ENVOY_BINARY
+            value: "/opt/llm-d-bins/envoy"
+
+          # --- vLLM / Ray settings ---
+          # PYTHONHASHSEED must be pinned fleet-wide or P2P block hashes never match.
+          - name: PYTHONHASHSEED
+            value: "0"
+          - name: VLLM_USE_V1
+            value: "1"
+          - name: TOKENIZERS_PARALLELISM
+            value: "false"
+          - name: OMP_NUM_THREADS
+            value: "1"
+
+          # --- NCCL ---
+          - name: NCCL_DEBUG
+            value: "INFO"
+
+          # --- llm-d integration debug logging (default: quiet) ---
+          # Uncomment to enable verbose output from integration components.
+          # See README ## Debug logging for details.
+          # - name: VERL_VLLM_LOG_LEVEL
+          #   value: "DEBUG"
+          # - name: VERL_SIDECAR_LOG_LEVEL
+          #   value: "5"
+          # - name: VERL_EPP_VERBOSITY
+          #   value: "5"
+          # - name: VERL_ENVOY_LOG_LEVEL
+          #   value: "debug"
+
+          resources:
+            limits:
+              cpu: "32"
+              # The driver collects a whole validation batch here; multimodal tasks
+              # need the headroom.
+              memory: "512G"
+              # No GPU on head - it only runs the driver (fit() loop) and Ray GCS.
+              # FSDP training and NCCL broadcast happen on worker pods.
+            requests:
+              cpu: "24"
+              memory: "256G"
+          ports:
+          - containerPort: 6379
+            name: gcs-server
+          - containerPort: 8265
+            name: dashboard
+          - containerPort: 10001
+            name: client
+          - containerPort: 8081
+            name: envoy
+          volumeMounts:
+          # Writable (not readOnly): push-epp.sh kubectl-cp's into here at runtime.
+          - mountPath: /opt/llm-d-bins
+            name: llm-d-bins
+          - mountPath: /dev/shm
+            name: dshm
+          - mountPath: /etc/llmd-configs
+            name: ${CONFIGMAP_NAME}
+            readOnly: true
+          # Durable cache (PVC): HF checkpoints and built parquet datasets survive a pod
+          # recreate. Mounted AT the paths everything already uses, via subPath, so the
+          # references to ${FW_HOME}/{models,data,hf_cache} across the workloads need
+          # no change - "fetch if missing, then reuse" is just snapshot_download's and
+          # make_*.py's existing behaviour, now landing on durable storage.
+          - mountPath: ${FW_HOME}/models
+            name: ${PVC_NAME}
+            subPath: models
+          - mountPath: ${FW_HOME}/data
+            name: ${PVC_NAME}
+            subPath: data
+          - mountPath: ${FW_HOME}/hf_cache
+            name: ${PVC_NAME}
+            subPath: hf_cache
+          # The framework clone lives here too, so every node installs the SAME
+          # commit instead of cloning independently and possibly landing on
+          # different ones - which a branch ref used to make possible.
+          - mountPath: ${FW_HOME}/code
+            name: ${PVC_NAME}
+            subPath: code
+        volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "32Gi"
+        - name: ${CONFIGMAP_NAME}
+          configMap:
+            name: ${CONFIGMAP_NAME}
+        - name: ${PVC_NAME}
+          persistentVolumeClaim:
+            claimName: ${PVC_NAME}
+        # Shared scratch for the EPP/Envoy binaries; starts empty on a fresh pod.
+        - name: llm-d-bins
+          emptyDir: {}
+
+  workerGroupSpecs:
+  # GPU workers: the worker pod's nvidia.com/gpu request must match the GPU count the
+  # run command targets (NGPUS_PER_NODE). As shipped the 4-GPU option below is active
+  # (Option A 8-GPU is commented out); enable whichever matches your run.
+  # Raise replicas/maxReplicas only if you add nodes and adjust verl nnodes / n_gpus_per_node.
+  - groupName: fsdp-workers
+    replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
+    rayStartParams:
+      num-cpus: "48"   # limit Ray's visible CPUs to reduce internal thread spawning
+    template:
+      spec:
+        # No node pinning: the GPU request anchors this worker and the head follows.
+        # Do not add affinity back to the head - mutual required affinity deadlocks.
+        # Exclude nodes with known-faulty GPUs (device plugin "GPU is lost" admission
+        # errors) so the scheduler does not keep retrying them. Add hostnames as needed.
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+              - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: NotIn
+                  values:
+                  - excluded-node
+        # EPP, Envoy and the KV sidecar are in none of the framework images. One
+        # crane init container extracts whichever of them this node needs into the
+        # llm-d-bins emptyDir. LLMD_BINS entries are dest=image::path-in-image.
+        # Bump a version in llm_d_rl_common/configs/versions.env and recreate the
+        # pod (push-epp.sh is the faster loop for EPP alone).
+        initContainers:
+        - name: fetch-llmd-bins
+          # Generic registry tool pinned by digest (go-containerregistry crane
+          # :debug, which ships /busybox/sh + /busybox/tar). Never rebuilt.
+          image: ${IMG_CRANE}
+          command: ["/busybox/sh", "-c"]
+          args:
+          - |
+            set -e
+            for spec in $LLMD_BINS; do
+              dest="${spec%%=*}"; rest="${spec#*=}"
+              img="${rest%%::*}"; path="${rest##*::}"
+              echo "extracting $path from $img -> /opt/llm-d-bins/$dest"
+              /ko-app/crane export --platform linux/amd64 "$img" - \
+                | /busybox/tar -xOf - "$path" > "/opt/llm-d-bins/$dest"
+              chmod +x "/opt/llm-d-bins/$dest"
+            done
+          env:
+          - name: LLMD_BINS
+            value: "epp=${IMG_EPP}::app/epp envoy=${IMG_ENVOY}::usr/local/bin/envoy pd-sidecar=${IMG_SIDECAR}::app/pd-sidecar"
+          volumeMounts:
+          - mountPath: /opt/llm-d-bins
+            name: llm-d-bins
+        containers:
+        - name: ray-worker
+          image: ${IMG_TRAINER} # engine-selected env image (IMG_VERL / IMG_VERL_SGLANG); one image covers native/epp/epp-p2p/PD
+          imagePullPolicy: Always
+          env:
+          # --- Runtime paths ---
+          - name: HOME
+            value: "/tmp"
+
+          # --- HuggingFace cache ---
+          - name: HF_HOME
+            value: "${FW_HOME}/hf_cache"
+          - name: HF_DATASETS_CACHE
+            value: "${FW_HOME}/hf_cache/datasets"
+          - name: XDG_CACHE_HOME
+            value: "${FW_HOME}/hf_cache"
+          - name: HUGGINGFACE_HUB_CACHE
+            value: "${FW_HOME}/hf_cache"
+
+          # --- Compile / framework caches ---
+          - name: TRITON_CACHE_DIR
+            value: "/tmp/triton"
+
+          # --- Experiment tracking ---
+          - name: WANDB_MODE
+            value: "offline"
+
+          # --- verl logging ---
+          - name: VERL_LOGGING_LEVEL
+            value: "INFO"
+
+          # --- Sidecar binary path (filled by the fetch-llmd-bins init container) ---
+          # The sidecar is in no framework image; fetch-llmd-bins extracts it from
+          # the separate sidecar image into /opt/llm-d-bins. Decode replicas launch
+          # whatever binary is here (PD mode), as does every replica in P2P mode.
+          - name: VERL_SIDECAR_BINARY
+            value: "/opt/llm-d-bins/pd-sidecar"
+
+          # --- vLLM / Ray settings ---
+          # PYTHONHASHSEED must be pinned fleet-wide or P2P block hashes never match.
+          - name: PYTHONHASHSEED
+            value: "0"
+          - name: VLLM_USE_V1
+            value: "1"
+          - name: PYTORCH_CUDA_ALLOC_CONF
+            # vLLM: "expandable_segments:False" - CuMemAllocator (sleep/wake) is
+            # incompatible with expandable_segments. SGLang: empty, which torch parses
+            # as no options. ENGINE_ALLOC_CONF in deploy.env.
+            value: "${ENGINE_ALLOC_CONF}"
+          - name: TOKENIZERS_PARALLELISM
+            value: "false"
+          - name: OMP_NUM_THREADS
+            value: "1"
+          - name: RAY_max_grpc_threads
+            value: "32"
+
+          # --- NCCL ---
+          - name: NCCL_DEBUG
+            value: "INFO"
+
+          # --- llm-d integration debug logging (default: quiet) ---
+          # Uncomment to enable verbose output from integration components.
+          # See README ## Debug logging for details.
+          # - name: VERL_VLLM_LOG_LEVEL
+          #   value: "DEBUG"
+          # - name: VERL_SIDECAR_LOG_LEVEL
+          #   value: "5"
+          # - name: VERL_EPP_VERBOSITY
+          #   value: "5"
+          # - name: VERL_ENVOY_LOG_LEVEL
+          #   value: "debug"
+
+          resources:
+            limits:
+            # --- Option A: 8 GPUs ---
+              cpu: "64"
+              # 1200G: the 8-rank FSDP actor + vLLM replicas + ref peak at ~250-256G of
+              # host RAM, AND the dshm tmpfs below is charged to this same cgroup - at
+              # cpu_bytes_to_use=72GiB x 8 replicas that is another 576GiB. A ceiling,
+              # not a reservation: requests stay at 256G. Node allocatable is ~2014GiB
+              # and every other pod on a GPU node here is a DaemonSet (~112GiB).
+              memory: "1200G"
+              nvidia.com/gpu: "${WORKER_GPUS}"
+            requests:
+              cpu: "48"
+              memory: "256G"
+              nvidia.com/gpu: "${WORKER_GPUS}"
+            # --- Option B: 4 GPUs ---
+            #  cpu: "32"
+            #  memory: "128G"
+            #  nvidia.com/gpu: "4"
+            #requests:
+            #  cpu: "16"
+            #  memory: "96G"
+            #  nvidia.com/gpu: "4"
+          volumeMounts:
+          - mountPath: /opt/llm-d-bins
+            name: llm-d-bins
+          - mountPath: /dev/shm
+            name: dshm
+          - mountPath: /etc/llmd-configs
+            name: ${CONFIGMAP_NAME}
+            readOnly: true
+          # Durable cache (PVC): HF checkpoints and built parquet datasets survive a pod
+          # recreate. Mounted AT the paths everything already uses, via subPath, so the
+          # references to ${FW_HOME}/{models,data,hf_cache} across the workloads need
+          # no change - "fetch if missing, then reuse" is just snapshot_download's and
+          # make_*.py's existing behaviour, now landing on durable storage.
+          - mountPath: ${FW_HOME}/models
+            name: ${PVC_NAME}
+            subPath: models
+          - mountPath: ${FW_HOME}/data
+            name: ${PVC_NAME}
+            subPath: data
+          - mountPath: ${FW_HOME}/hf_cache
+            name: ${PVC_NAME}
+            subPath: hf_cache
+          # The framework clone lives here too, so every node installs the SAME
+          # commit instead of cloning independently and possibly landing on
+          # different ones - which a branch ref used to make possible.
+          - mountPath: ${FW_HOME}/code
+            name: ${PVC_NAME}
+            subPath: code
+        volumes:
+        # Shared scratch: fetch-llmd-bins (init) extracts the binaries here and
+        # replicas read them at /opt/llm-d-bins (VERL_SIDECAR_BINARY). Starts empty
+        # on a fresh pod.
+        - name: llm-d-bins
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            # /dev/shm holds OffloadingConnector's CPU KV tier, so this caps
+            # cpu_bytes_to_use x n_replicas. Counts against the pod memory limit.
+            # 640Gi headroom for 8 x 72GiB (PR #2067's "size the CPU tier at least as
+            # large as the per-replica GPU KV cache", measured at 67.43GiB). A cap only,
+            # so smaller cpu_bytes_to_use values need no manifest change - sweep them
+            # with P2P_CPU_BYTES_TO_USE instead. NOTE: a leaked vllm_offload_*.mmap now
+            # pins up to 72GiB, so clearing them between runs is mandatory, not hygiene.
+            sizeLimit: "${DSHM_SIZE}"
+        - name: ${CONFIGMAP_NAME}
+          configMap:
+            name: ${CONFIGMAP_NAME}
+        - name: ${PVC_NAME}
+          persistentVolumeClaim:
+            claimName: ${PVC_NAME}

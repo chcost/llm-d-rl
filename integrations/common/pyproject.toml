@@ -11,8 +11,19 @@ requires-python = ">=3.10"
 dependencies = [
     "grpcio",
     "pyyaml",
+]
+
+[project.optional-dependencies]
+# Only llm-d-registration-shim needs an HTTP server. A framework that starts EPP
+# in-process (verl) never imports it, so it should not pull a web framework.
+shim = [
     "fastapi",
     "uvicorn",
+]
+# Only llm_d_rl_common.ray_router imports ray. Frameworks that start the router
+# from a pod lifecycle hook (llm-d-rl-router) never touch it.
+ray = [
+    "ray",
 ]
 
 [project.scripts]
@@ -22,6 +33,14 @@ llm-d-rl-router = "llm_d_rl_common.cli:main"
 
 llm-d-registration-shim = "llm_d_rl_common.registration_shim:main"
 
+# Compose a shipped EPP config from base.yaml + a profile + modifiers.
+llm-d-rl-epp-config = "llm_d_rl_common.epp_config:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["llm_d_rl_common*"]
+
+[tool.setuptools.package-data]
+# The shipped routing configs are data inside the package, so pip install alone
+# is enough to get them (see llm_d_rl_common/configs/__init__.py).
+"llm_d_rl_common.configs" = ["*.yaml", "**/*.yaml", "**/*.env"]

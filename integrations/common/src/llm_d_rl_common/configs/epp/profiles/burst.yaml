@@ -1,0 +1,54 @@
+# Burst prefix-cache routing (the default profile).
+# Pipeline: parser -> burst-prefix-cache-producer -> prefix-cache-scorer.
+# prefix-cache-scorer (2) + load-aware-scorer (1) with max-score-picker, so the
+# burst producer's within-window group co-location wins over load balancing 2:1.
+# Mirrors the inference-scheduler burst sample.
+plugins:
+  - name: prefix-cache-scorer
+    type: prefix-cache-scorer
+    parameters:
+      # Score on the burst producer's within-window grouping instead of the
+      # default persistent/approximate prefix cache. NOTE: this replaces
+      # cross-step warm-cache scoring with within-step group co-location.
+      prefixMatchInfoProducerName: burst-prefix-cache-producer
+
+  - name: burst-prefix-cache-producer
+    type: burst-prefix-cache-producer
+    # Co-locate the G group-samples of a prompt onto one replica instead of
+    # scattering them on a cold cache (the RL rollout group-scatter problem).
+    # windowDurationMs must be wide enough to capture a whole rollout step's
+    # same-prompt samples (verl dispatches them in one burst); too small ->
+    # partial grouping. It adds up to windowDurationMs latency per request.
+    # 100ms is the default: on GSM8K/HotpotQA a rollout step's burst arrives within
+    # one 100ms window and within-step co-location was already ~82-99%. A QuALITY
+    # experiment raised this to 1500ms to fit the huge ~6.7k-tok article prompts'
+    # wider arrival spread into ONE window (100ms had split each step into ~5 windows,
+    # co-loc ~35% -> "size-8"/within-step ~82%; 1500ms lifted within-step to ~100%).
+    # That gain was OVERKILL: the QuALITY EPP win came from shuffle-on (native
+    # prefix-hit 91%->42%), not the window, and 1500ms cost pick_s ~250ms->1668ms
+    # (~+1.4s/step) for a co-loc gain EPP did not need (its own hit was 93-97% either
+    # way). Reverted to 100ms; widen again only if a workload's per-step arrival burst
+    # is measurably too spread for one 100ms window.
+    parameters:
+      windowDurationMs: 1000
+      maxPerReplica: -1     # -1 = whole group to one replica (max co-location).
+                            # modifiers/spread.yaml sets this to 1.
+      blockSizeTokens: 64   # prefix block size used for match length
+      minColocateBlocks: 1  # min matching blocks required to co-locate a request
+      maxBatchSize: 10000
+      # Balance placement across replicas by prefix-block (token) load, not request
+      # count. Spreads long-prompt groups so no replica saturates KV on stacked large
+      # prefixes. "requests" = default (request-count balance).
+      balanceBy: tokens
+
+  - name: load-aware-scorer
+    type: load-aware-scorer
+
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: prefix-cache-scorer
+        weight: 2
+      - pluginRef: load-aware-scorer
+        weight: 1
+      - pluginRef: max-score-picker

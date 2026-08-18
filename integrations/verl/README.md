@@ -13,10 +13,10 @@ No verl source changes are required - the whole integration is a single Hydra ov
 
 ## Get started
 
-- **Run it (recommended path):** [`deploy/kuberay/`](deploy/kuberay/README.md) - a complete,
+- **Run it (recommended path):** [`quickstart/kuberay/`](../../quickstart/kuberay/README.md) - a complete,
   runnable end-to-end example on Kubernetes (KubeRay): cluster manifest, configs, and scripts for
   deploy, train, and benchmark.
-- **Run it on any Ray cluster:** [`deploy/`](deploy/README.md) - the general deployment guide
+- **Run it on any Ray cluster:** [`docs/deploying.md`](docs/deploying.md) - the general deployment guide
   (install steps, the Hydra override reference, and env-var reference), with the KubeRay commands
   as the concrete example of each step.
 - **Understand it:** [`docs/architecture.md`](docs/architecture.md) - how the integration works,
@@ -34,15 +34,15 @@ Both need no verl patches, and both support prefill/decode (PD) disaggregation. 
 
 ## Benchmarks
 
-[`benchmarks/`](benchmarks/) is the performance-testing harness for the integration: it benchmarks
+[`quickstart/benchmarks/`](../../quickstart/benchmarks/) is the performance-testing harness for the integration: it benchmarks
 rollout routing (native vs EPP) across multiple RL workloads and collects the results.
 
-- [`benchmarks/workloads/`](benchmarks/workloads/) - one folder per workload, each self-contained: a
+- [`benchmarks/workloads/`](../../quickstart/benchmarks/verl/workloads/) - one folder per workload, each self-contained: a
   `task.env` with its verl overrides, its data builder, and (for Search-R1) its tool config and
   retriever service.
 - [`benchmarks/scripts/`](benchmarks/scripts/) - the run harness; `run_test.sh --task <name>` runs a
   chosen workload in `native` or `epp` mode.
-- Result summaries live in each workload's README and in [`benchmarks/README.md`](benchmarks/README.md)
+- Result summaries live in each workload's README and in [`benchmarks/README.md`](../../quickstart/benchmarks/verl/README.md)
   (raw run data is kept out of the repo).
 
 ---

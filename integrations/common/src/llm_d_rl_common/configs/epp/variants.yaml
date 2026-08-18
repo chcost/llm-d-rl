@@ -1,0 +1,19 @@
+# The EPP configs we ship, each as a chassis (base.yaml) plus exactly one file
+# from profiles/ and any number from modifiers/, merged in the order listed.
+#
+# The keys are the filenames consumers already pass as
+# rollout.custom.epp_config_file=/etc/llmd-configs/<key>, so they are a public
+# interface - rename one and every driver and README that names it must change.
+#
+# Adding a combination is a line here, not a new file. Render one with:
+#   llm-d-rl-epp-config render epp-config-p2p-spread.yaml
+variants:
+  epp-config.yaml:              [burst]
+  epp-config-spread.yaml:       [burst, spread]
+  epp-config-p2p.yaml:          [burst, p2p, p2p-from-burst]
+  epp-config-p2p-spread.yaml:   [burst, p2p, p2p-from-burst, spread]
+  epp-config-persistent.yaml:   [persistent]
+  epp-config-p2p-load.yaml:     [load-only, p2p]
+  epp-config-inflight.yaml:     [inflight]
+  epp-config-inflight-cap.yaml: [inflight, cap]
+  epp-config-pd.yaml:           [pd]

@@ -1,0 +1,15 @@
+# Spread a GRPO group across replicas instead of co-locating it.
+#
+# One key, deep-merged into the burst producer the profile already defined -
+# every other burst parameter (windowDurationMs, blockSizeTokens,
+# minColocateBlocks, maxBatchSize, balanceBy) is untouched.
+#
+# Measured on 32 conversations x val_kwargs.n=8: straggler 30.8% -> 2.6% (12x),
+# work imbalance 23.1 -> 6.7, mean concurrency 74.2 -> 108.4, with all 32 groups
+# landing on 8 distinct replicas. It costs per-request time (gen_mean 8.52 ->
+# 14.47) because each sibling re-prefills the shared prefix, which is what
+# modifiers/p2p.yaml is meant to recover.
+plugins:
+  - name: burst-prefix-cache-producer
+    parameters:
+      maxPerReplica: 1      # 1 = at most one group sample per replica

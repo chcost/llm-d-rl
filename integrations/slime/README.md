@@ -17,5 +17,5 @@ llm-d-router-shim --engine-type sglang --id-field id
 
 ## Get started
 
-- **[deploy/kuberay/](deploy/kuberay/README.md)** — end-to-end KubeRay example: cluster, configs, train script
-- **[deploy/README.md](deploy/README.md)** — instructions for wiring llm-d routing into an existing slime training setup.
+- **[quickstart/kuberay/](../../quickstart/kuberay/README.md)** — end-to-end KubeRay example: cluster, configs, train script
+- **[docs/deploying.md](docs/deploying.md)** — instructions for wiring llm-d routing into an existing slime training setup.

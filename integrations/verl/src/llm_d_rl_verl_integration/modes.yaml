@@ -1,0 +1,132 @@
+# The verl integration's override contract, as data.
+#
+# This is what you set on your own verl launch command to turn the integration
+# on. It used to exist only inside benchmarks/scripts/run_test.sh's case
+# statement - i.e. inside the example - so an adopter with their own launcher had
+# to reverse-engineer a benchmark driver, and the documented reference drifted
+# from it in both directions (five modes existed in the driver and not the docs;
+# two were documented and unreachable from it).
+#
+# Render a mode's overrides with:
+#   llm-d-rl-verl-overrides epp
+#   llm-d-rl-verl-overrides --list
+#
+# ${VAR:-default} is expanded from the environment by the renderer, matching what
+# the shell did before.
+
+# Applied to every mode. use_v1 is mandatory: every llm-d manager subclasses
+# verl's AgentLoopManagerTQ, which only the v1 trainer drives correctly.
+common:
+  hydra:
+    - trainer.use_v1=true
+  # Appended after the per-mode overrides, matching the order the driver has
+  # always emitted. No mode repeats a key, so order is not semantic - this just
+  # keeps the generated argument list byte-identical to the previous one.
+  hydra_last:
+    - +actor_rollout_ref.rollout.custom.epp_endpoints_file=/tmp/epp-endpoints.yaml
+
+# Forwarded into ray_kwargs.ray_init.runtime_env.env_vars, but only for modes
+# that start EPP, and only when actually set in the environment. LlmdActor reads
+# these at import time from os.environ, and Ray's job-level runtime_env does not
+# fall back to the pod's container env for actors spawned under a job that
+# already set an explicit runtime_env - so an unforwarded value is silently lost.
+epp_binary_env:
+  - VERL_EPP_BINARY
+  - VERL_ENVOY_BINARY
+  - VERL_SIDECAR_BINARY
+
+# vLLM OffloadingConnector settings shared by every P2P mode. spec_name and
+# secondary_tiers are BOTH mandatory: without them there is no P2P tier at all
+# and remote_kv_source is silently ignored, which is the state every P2P run
+# before 2026-08-10 was in. Size cpu_bytes_to_use >= the per-replica GPU KV
+# cache, capped by /dev/shm.
+p2p_engine: &p2p_engine
+  - +ray_kwargs.ray_init.runtime_env.env_vars.VERL_USE_EXTERNAL_MODULES=llm_d_rl_verl_integration.register_p2p
+  - +actor_rollout_ref.rollout.engine_kwargs.vllm.block_size=64
+  - +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector=OffloadingConnector
+  - +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_role=kv_both
+  - +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector_extra_config.offload_prompt_only=false
+  - +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector_extra_config.cpu_bytes_to_use=${P2P_CPU_BYTES_TO_USE:-4294967296}
+  - +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector_extra_config.spec_name=TieringOffloadingSpec
+  - +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_transfer_config.kv_connector_extra_config.secondary_tiers=[{type:p2p}]
+
+modes:
+  native:
+    summary: stock verl routing, plus reqlog and the endpoints YAML for the scraper
+    manager: llm_d_rl_verl_integration.native_logging.agent_loop_manager.NativeLoggingAgentLoopManager
+
+  epp:
+    summary: EPP picks the replica over gRPC; verl dispatches to it directly
+    manager: llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager
+    epp_config: epp-config.yaml
+
+  epp-inflight:
+    summary: EPP routing on its in-flight counter, no cap
+    manager: llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager
+    epp_config: epp-config-inflight.yaml
+    # Holds the routing stream open for the whole generation, so the counter
+    # reflects the real window instead of a pick-time snapshot. Without it an
+    # active-request-scorer or a concurrency cap has nothing to bind on.
+    hydra:
+      - +actor_rollout_ref.rollout.custom.epp_report_completion=true
+
+  epp-fc:
+    summary: EPP routing plus a per-endpoint concurrency cap (flow-control queue)
+    manager: llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager
+    epp_config: epp-config-inflight-cap.yaml
+    hydra:
+      - +actor_rollout_ref.rollout.custom.epp_report_completion=true
+
+  epp-p2p:
+    summary: EPP routing plus P2P KV-cache sharing; a per-replica sidecar turns EPP's source header into kv_transfer_params
+    manager: llm_d_rl_verl_integration.llmd_epp.agent_loop_manager.LlmdRouterAgentLoopManager
+    epp_config: epp-config-p2p.yaml
+    rollout_name: vllm-llmd-p2p
+    external_lib: llm_d_rl_verl_integration.register_p2p
+    # The P2P tier deadlocks verl's engine sleep(), so pass
+    # free_cache_engine=false to EVERY arm of a comparison, not just this one.
+    hydra: *p2p_engine
+
+  epp-sglang:
+    summary: EPP direct-gRPC routing with SGLang replicas instead of vLLM
+    manager: llm_d_rl_verl_integration.llmd_epp_sglang.agent_loop_manager.SglangEPPRouterAgentLoopManager
+    epp_config: epp-config.yaml
+    # sglang is a verl BUILT-IN backend, so no external_lib import hook is
+    # needed (unlike vllm-llmd-p2p, which this repo registers itself).
+    rollout_name: sglang
+
+  wave-admission:
+    summary: estimation-gated admission with sticky placement, no EPP
+    manager: llm_d_rl_verl_integration.wave_admission.agent_loop_manager.WaveAdmissionAgentLoopManager
+
+  wave-admission-p2p:
+    summary: wave-admission on the P2P backend, so a migration pulls the resident replica's KV
+    manager: llm_d_rl_verl_integration.wave_admission.agent_loop_manager.WaveAdmissionAgentLoopManager
+    rollout_name: vllm-llmd-p2p
+    external_lib: llm_d_rl_verl_integration.register_p2p
+    hydra:
+      - *p2p_engine
+      - +actor_rollout_ref.rollout.custom.wave_admission_p2p_kv_available=true
+      - +actor_rollout_ref.rollout.custom.wave_admission_reserve_mode=size
+      - +actor_rollout_ref.rollout.custom.wave_admission_reserve_z=1.5
+      - +actor_rollout_ref.rollout.custom.wave_admission_max_wait_s=${WAVE_ADMISSION_MAX_WAIT_S:-20}
+    # Skip the sidecar and POST to vLLM's native endpoint. "enabled" not "true":
+    # Ray's runtime_env.env_vars rejects the bool Hydra infers from "true".
+    when:
+      - env: WAVE_ADMISSION_P2P_NOSIDECAR
+        equals: "true"
+        hydra:
+          - +ray_kwargs.ray_init.runtime_env.env_vars.VERL_P2P_NOSIDECAR=enabled
+          - +actor_rollout_ref.rollout.custom.wave_admission_p2p_nosidecar=true
+          - +actor_rollout_ref.rollout.custom.wave_admission_p2p_port=${WAVE_ADMISSION_P2P_PORT:-7777}
+
+  llm-d:
+    summary: verl speaks HTTP to one Envoy endpoint; Envoy plus EPP pick the replica
+    manager: llm_d_rl_verl_integration.llmd_serving.agent_loop_manager.LlmdAgentLoopManager
+    epp_config: epp-config.yaml
+    envoy_config: envoy.yaml
+    # Reachable only by hand today: run_test.sh has no launcher for it, and on
+    # verl 060bebc5 its TokenOutput carries no global_steps, so the trainer's
+    # staleness metric raises TypeError after the first rollout. Plumb that
+    # through before using it.
+    status: manual-only

@@ -1,0 +1,18 @@
+# Per-endpoint concurrency cap: queue requests over the cap instead of dispatching
+# them (EPP flow control). Compose with profiles/inflight.yaml, whose in-flight
+# producer feeds the detector.
+featureGates:
+  - flowControl
+
+plugins:
+  - name: concurrency-detector
+    type: concurrency-detector
+    parameters:
+      maxConcurrency: 8
+      headroom: 0
+      concurrencyMode: requests
+      inFlightLoadProducerName: inflight-load-producer
+
+flowControl:
+  saturationDetector:
+    pluginRef: concurrency-detector
