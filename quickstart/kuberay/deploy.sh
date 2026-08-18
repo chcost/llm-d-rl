@@ -247,7 +247,9 @@ check() {
   [[ -n "$all" ]] || { echo "ERROR: no pods for cluster $CLUSTER_NAME in $NAMESPACE" >&2; return 1; }
   local pod json tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
   for pod in $all; do
-    if json="$(K exec -n "$NAMESPACE" "$pod" -- cat /tmp/llmd-provisioned.json 2>/dev/null)"; then
+    # The marker is pretty-printed on the pod for humans, so flatten it: this
+    # goes into one tab-separated field per pod, and JSON ignores whitespace.
+    if json="$(K exec -n "$NAMESPACE" "$pod" -- cat /tmp/llmd-provisioned.json 2>/dev/null | tr -d '\n')"; then
       printf '%s\t%s\n' "$pod" "$json" >> "$tmp"
     else
       printf '%s\t\n' "$pod" >> "$tmp"
@@ -261,7 +263,10 @@ bad, seen = [], {}
 for pod, raw in rows:
     if not raw.strip():
         print(f"  {pod}: NOT PROVISIONED"); bad.append(pod); continue
-    d = json.loads(raw)
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        print(f"  {pod}: UNREADABLE MARKER ({raw[:60]!r})"); bad.append(pod); continue
     print(f"  {pod}: {d['framework']}@{d['framework_ref'][:12]} "
           f"integration={d['integration_source'][:12]} {d['engine']} {d['engine_version']} "
           f"({d['node_role']})")

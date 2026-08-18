@@ -22,8 +22,8 @@ but not verl itself, so verl is installed at runtime. The version is pinned by `
 [`kuberay/deploy.env`](../../../quickstart/kuberay/deploy.env) - the single place to change it:
 
 ```bash
-git clone https://github.com/volcengine/verl.git /tmp/verl/verl
-cd /tmp/verl/verl && git checkout "$VERL_COMMIT"
+git clone https://github.com/volcengine/verl.git "$VERL_SRC"
+cd "$VERL_SRC" && git checkout "$VERL_COMMIT"
 pip install --no-deps -e .
 ```
 
