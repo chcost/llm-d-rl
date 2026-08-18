@@ -100,12 +100,12 @@ create_configmap() {
   envsubst '${EPP_PARSER}' < "$COMMON_CONFIGS/epp-config-burst.yaml" > "$rendered"
   kubectl create configmap llmd-epp-configs \
     --from-file=epp-config.yaml="$rendered" \
-    --from-file=epp-config.yaml=../epp-config.yaml \
     --from-file=epp-config-persistent.yaml=../epp-config-persistent.yaml \
     --from-file=epp-config-p2p-spread.yaml=../epp-config-p2p-spread.yaml \
     --from-file=epp-config-spread.yaml=../epp-config-spread.yaml \
     --from-file=epp-config-p2p.yaml=../epp-config-p2p.yaml \
     --from-file=epp-config-p2p-load.yaml=../epp-config-p2p-load.yaml \
+    --from-file=epp-config-pd.yaml=../epp-config-pd.yaml \
     --from-file=envoy.yaml="$COMMON_CONFIGS/envoy.yaml" \
     --from-file=searchr1_tool_config.yaml=../../benchmarks/workloads/searchr1/tool_config.yaml \
     --from-file=epp-config-inflight.yaml=../epp-config-inflight.yaml \
