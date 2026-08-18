@@ -149,7 +149,21 @@ fi
 read -r -a EXTRA_OV <<< "${EXTRA_OVERRIDES:-}"
 
 # -- launch --------------------------------------------------------------------
-cd /tmp/verl/verl/examples/grpo_trainer
+# Where verl actually is. Provisioning installs it editable from a PVC-shared
+# clone, so ask the installed package rather than hardcoding a path - that way
+# this cannot drift from provision/verl.sh's VERL_SRC.
+VERL_SRC_DIR="${VERL_SRC:-}"
+if [[ -z "$VERL_SRC_DIR" ]]; then
+  VERL_SRC_DIR="$(python3 -c 'import verl,pathlib;print(pathlib.Path(verl.__file__).resolve().parent.parent)' 2>/dev/null || true)"
+fi
+if [[ -z "$VERL_SRC_DIR" || ! -d "$VERL_SRC_DIR/examples/grpo_trainer" ]]; then
+  echo "ERROR: cannot locate verl's checkout (examples/grpo_trainer)." >&2
+  echo "       Tried VERL_SRC and the installed verl package." >&2
+  echo "       Is the cluster provisioned? kuberay/deploy.sh provision --framework verl" >&2
+  exit 1
+fi
+echo "==> verl checkout: $VERL_SRC_DIR"
+cd "$VERL_SRC_DIR/examples/grpo_trainer"
 
 # -- vLLM /metrics scraper ------------------------------------------------------
 # Always on, every mode: a run costs GPU time and a re-run costs it again, while

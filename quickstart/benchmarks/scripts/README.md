@@ -47,9 +47,9 @@ For `gsm8k` and `geo3k`, use verl's own preprocessing scripts.
 
 ```bash
 # gsm8k
-kubectl exec -n $NS $H -- python3 /tmp/verl/verl/examples/data_preprocess/gsm8k.py --local_save_dir /tmp/verl/data/gsm8k
+kubectl exec -n $NS $H -- python3 /tmp/verl/code/verl/examples/data_preprocess/gsm8k.py --local_save_dir /tmp/verl/data/gsm8k
 # geo3k
-kubectl exec -n $NS $H -- python3 /tmp/verl/verl/examples/data_preprocess/geo3k.py --local_save_dir /tmp/verl/data/geo3k
+kubectl exec -n $NS $H -- python3 /tmp/verl/code/verl/examples/data_preprocess/geo3k.py --local_save_dir /tmp/verl/data/geo3k
 ```
 
 For workloads with a custom script (`hotpotqa`, `musique`, `quality`, `scotus_xl`, `searchr1`),
