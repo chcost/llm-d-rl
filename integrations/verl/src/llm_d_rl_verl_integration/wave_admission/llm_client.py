@@ -12,7 +12,7 @@ import ray
 from verl.workers.rollout.llm_server import LLMServerClient
 from verl.workers.rollout.replica import TokenOutput
 
-from llm_d_rl_common.reqlog import log_request, open_reqlog, phash
+from llm_d_rl_common.reqlog import log_request, open_reqlog, phash, tag_global_steps
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,10 @@ def _forced_output_len(sampling_params: dict[str, Any]) -> int:
 
 class WaveAdmissionLLMClient(LLMServerClient):
     """Asks the ledger for a replica, then dispatches to that server actor."""
+
+    # Tells trace_player it may pass session_final/session_work. Other clients
+    # leave this false, so the hints never reach verl's generate().
+    wants_session_hint = True
 
     def __init__(
         self,
@@ -79,6 +83,9 @@ class WaveAdmissionLLMClient(LLMServerClient):
 
         placement = await self._admission_ledger.acquire.remote(
             rid, turn_index=turn, context_size=context_size,
+            session_final=kwargs.pop("session_final", None),
+            session_work=kwargs.pop("session_work", None),
+            group_key=kwargs.pop("group_key", None),
         )
         replica = placement["replica"]
         kv_source = placement.get("kv_source")
@@ -119,6 +126,9 @@ class WaveAdmissionLLMClient(LLMServerClient):
                 **multimodal_kwargs,
                 **kwargs,
             )
+            # verl's _compute_metrics int()s min/max_global_steps on every tag, so a
+            # missing key becomes None and kills the run after the first rollout.
+            tag_global_steps(out)
             return out
         finally:
             t_end = time.monotonic()
