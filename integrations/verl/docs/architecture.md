@@ -2,8 +2,8 @@
 
 How the verl + llm-d integration works, the two routing modes, and what is mandatory vs optional.
 
-For how to actually deploy and run it, see the [general deployment guide](../deploy/README.md) and
-the [KubeRay walkthrough](../deploy/kuberay/README.md).
+For how to actually deploy and run it, see the [general deployment guide](deploying.md) and
+the [KubeRay walkthrough](../../../quickstart/kuberay/README.md).
 
 ## Minimal integration (one Hydra override)
 
@@ -16,7 +16,7 @@ Hydra override:
 ```
 
 (plus two paths - the EPP config file and where to write the endpoints YAML; see the
-[reference tables](../deploy/README.md#hydra-override-reference)).
+[reference tables](configuration.md)).
 
 That one class, and the handful of files it pulls in, is the entire mandatory integration:
 
@@ -140,9 +140,9 @@ Role labels (`llm-d.ai/role: prefill` / `decode`) are written to the EPP endpoin
 
 PD needs a few extra dependencies (NIXL) and vLLM/verl patches that are not in the stock verl
 environment image; these are baked directly into
-[`deploy/Dockerfile.verl.vllm-p2p`](../deploy/Dockerfile.verl.vllm-p2p) - the same image every
+[`deploy/Dockerfile.verl.vllm-p2p`](../../../quickstart/images/Dockerfile.verl.vllm-p2p) - the same image every
 other mode (native/EPP/P2P) already uses, so PD needs no separate build or image tag. The PD
-Hydra overrides are in the [general deployment guide](../deploy/README.md#pd-disaggregation).
+Hydra overrides are in the [general deployment guide](deploying.md#pd-disaggregation).
 
 ## Endpoints YAML
 

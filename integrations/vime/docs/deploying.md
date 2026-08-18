@@ -39,15 +39,25 @@ does not search `PATH`).
 
 ### 3. Place the config files
 
-Copy these starting-point configs to any path readable on the head node:
+The configs ship inside `llm-d-rl-common`, so a pip install is enough - there is
+no file to copy out of this repository.
 
-- [`epp-config-burst.yaml`](../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/epp-config-burst.yaml) - EPP
-  scorer pipeline (burst prefix-cache + load-aware). Parser defaults to
-  `vllmhttp-parser`.
-- [`envoy-shim.yaml`](../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/envoy-shim.yaml) - Envoy listener
-  (inference through EPP, `/workers*` to the shim)
+```bash
+# the burst EPP config, composed from base.yaml + profiles/burst.yaml
+llm-d-rl-epp-config render epp-config.yaml -o /etc/llmd-configs/epp-config.yaml
+# Envoy: inference through EPP, /workers* to the registration shim
+python3 -c "from llm_d_rl_common import configs; print(configs.path('envoy-shim.yaml'))"
+```
 
-The EPP config's `file-discovery` plugin `path:` must match the `--endpoints-file` passed to `llm-d-registration-shim` (default `/tmp/epp-endpoints.yaml`).
+`EPP_PARSER` in the rendered config selects the request parser; it is a
+`${EPP_PARSER}` placeholder so one config serves every engine. Substitute it
+before use (`envsubst '${EPP_PARSER}'`), and make sure the EPP build actually
+carries that parser plugin - see
+[`versions.env`](../../common/src/llm_d_rl_common/configs/versions.env).
+
+The EPP config's `file-discovery` plugin `path:` must match the
+`--endpoints-file` passed to `llm-d-registration-shim` (default
+`/tmp/epp-endpoints.yaml`).
 
 ### 4. Start llm-d routing
 

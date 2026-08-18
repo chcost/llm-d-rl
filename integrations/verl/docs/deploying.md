@@ -1,8 +1,8 @@
-# Deploying the integration
+# Deploying the verl integration on any Ray cluster
 
 This is the general guide for wiring the integration into any Ray cluster, plus the full Hydra
 override and environment-variable reference. For a ready-to-run, end-to-end example, use the
-**[KubeRay walkthrough](kuberay/README.md)** - it is the concrete instantiation of every step below.
+**[KubeRay walkthrough](../../../quickstart/kuberay/README.md)** - it is the concrete instantiation of every step below.
 
 For how the integration works (the two modes, the mandatory core, PD), see
 [`../docs/architecture.md`](../docs/architecture.md).
@@ -19,7 +19,7 @@ For how the integration works (the two modes, the mandatory core, PD), see
 
 The official `verlai/verl` images are **environment** images: they ship the vLLM/CUDA/torch stack
 but not verl itself, so verl is installed at runtime. The version is pinned by `VERL_COMMIT` in
-[`kuberay/deploy.env`](kuberay/deploy.env) - the single place to change it:
+[`kuberay/deploy.env`](../../../quickstart/kuberay/deploy.env) - the single place to change it:
 
 ```bash
 git clone https://github.com/volcengine/verl.git /tmp/verl/verl
@@ -28,7 +28,7 @@ pip install --no-deps -e .
 ```
 
 Do this on **every** node (head and all workers). On KubeRay this runs from the `postStart` hook in
-[`kuberay/ray-cluster.yaml.tmpl`](kuberay/ray-cluster.yaml.tmpl), which `deploy.sh` renders with the
+[`kuberay/ray-cluster.yaml.tmpl`](../../../quickstart/kuberay/ray-cluster.head-workers.yaml.tmpl), which `deploy.sh` renders with the
 value from `deploy.env`.
 
 To move to a newer verl, edit `VERL_COMMIT` and recreate the pods (`postStart` clones fresh on every
@@ -38,7 +38,7 @@ echoes `verl at <sha> (requested <ref>)` - compare them across pods before trust
 
 #### Nightly-vLLM environment image
 
-[`deploy/Dockerfile.verl.vllm-p2p`](Dockerfile.verl.vllm-p2p) builds an alternative
+[`deploy/Dockerfile.verl.vllm-p2p`](../../../quickstart/images/Dockerfile.verl.vllm-p2p) builds an alternative
 environment image for testing verl against a nightly/dev vLLM wheel instead of a pinned stable
 release. Built from the verl 0.24 recipe (torch, CUDA 13.0.2, transformers, flash-attn, etc.) but
 pins vLLM to a dev wheel off `wheels.vllm.ai` at a specific commit, to pick up two unmerged
@@ -51,7 +51,7 @@ a separate `Dockerfile.pd` layered on top of this one - folded in directly so ev
 docker build -f deploy/Dockerfile.verl.vllm-p2p -t <your-registry>/verl:vllm024.devN .
 docker push <your-registry>/verl:vllm024.devN
 ```
-Then point `IMG_VERL` at it in [`kuberay/deploy.env`](kuberay/deploy.env).
+Then point `IMG_VERL` at it in [`kuberay/deploy.env`](../../../quickstart/kuberay/deploy.env).
 
 Public image, published for the org: `ghcr.io/llm-d-incubation/llm-d-rl/verl:vllm-p2p`. This is
 the tag `deploy.env` points at by default.
@@ -110,20 +110,38 @@ worker, decode replicas launch the sidecar (PD only).
 
 ### 4. Place the config files
 
-Copy these starting-point configs (in this directory) to any path readable on the head node, edit as
-needed, and pass their paths as the Hydra overrides in step 5:
+The EPP configs ship inside `llm-d-rl-common`, so a pip install is enough - there
+is no file to copy out of this repository. Each one is composed from a chassis
+plus a routing profile plus optional modifiers, listed in
+[`configs/epp/variants.yaml`](../../common/src/llm_d_rl_common/configs/epp/variants.yaml).
+Render whichever you want to a path the head node can read:
 
-- [`epp-config-burst.yaml`](../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/epp-config-burst.yaml) - EPP scorer config (standard / burst routing). Parser defaults to `vllmhttp-parser`.
-- [`deploy/epp-config-pd.yaml`](epp-config-pd.yaml) - EPP scorer config (PD disaggregated)
-- [`envoy.yaml`](../../common/src/llm_d_rl_common/src/llm_d_rl_common/configs/envoy.yaml) - Envoy proxy config (llm-d serving mode only)
+```bash
+llm-d-rl-epp-config list                              # every variant and its layers
+llm-d-rl-epp-config render epp-config.yaml -o /etc/llmd-configs/epp-config.yaml
+llm-d-rl-epp-config render epp-config-pd.yaml -o /etc/llmd-configs/epp-config-pd.yaml
+```
 
-The EPP config's `file-discovery` plugin `path:` must match the `epp_endpoints_file` override -
-`LlmdActor` writes the replica list there and EPP reads it (default `/tmp/epp-endpoints.yaml`).
+Envoy's config (llm-d serving mode only) is shipped as data rather than composed:
+
+```bash
+python3 -c "from llm_d_rl_common import configs; print(configs.path('envoy.yaml'))"
+```
+
+To change scoring, edit `configs/epp/profiles/` or `configs/epp/modifiers/` and
+re-render - never a rendered file, which carries a generated header saying so. The
+EPP build that can load these is pinned alongside them in
+[`versions.env`](../../common/src/llm_d_rl_common/configs/versions.env), because a
+config can require a plugin or a stability flag only some builds have.
+
+The EPP config's `file-discovery` plugin `path:` must match the
+`epp_endpoints_file` override - the router writes the replica list there and EPP
+reads it (default `/tmp/epp-endpoints.yaml`).
 
 ### 5. Add the Hydra overrides and run
 
 Running the integration is just a few Hydra overrides on your existing verl training command - see
-the reference below. The KubeRay walkthrough ([`kuberay/README.md`](kuberay/README.md)) shows the
+the reference below. The KubeRay walkthrough ([`kuberay/README.md`](../../../quickstart/kuberay/README.md)) shows the
 full commands for each mode.
 
 ## Hydra override reference

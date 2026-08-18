@@ -34,15 +34,15 @@ shared components used by every integration.
 
 ### configs
 
-[`configs/`](configs/) holds shared Envoy and EPP config. Each integration's `deploy.sh`
+[`configs/`](src/llm_d_rl_common/configs/) holds shared Envoy and EPP config. Each integration's `deploy.sh`
 points at these files.
 
-- [`configs/envoy.yaml`](configs/envoy.yaml) — Base Envoy config: inference on
+- [`configs/envoy.yaml`](src/llm_d_rl_common/configs/envoy.yaml) — Base Envoy config: inference on
   `:8081` (no registration API).
-- [`configs/envoy-shim.yaml`](configs/envoy-shim.yaml) — Same inference path as
+- [`configs/envoy-shim.yaml`](src/llm_d_rl_common/configs/envoy-shim.yaml) — Same inference path as
   the base Envoy config, plus `/workers*` forwarded to
   `llm-d-registration-shim`.
-- [`configs/epp-config-burst.yaml`](configs/epp-config-burst.yaml) - burst
+- [`configs/epp-config-burst.yaml`](src/llm_d_rl_common/configs/epp/profiles/burst.yaml) - burst
   prefix-cache profile. Parser defaults to `vllmhttp-parser`; slime sets
   `EPP_PARSER=sglanghttp-parser` in its `deploy.env`.
 
