@@ -1,5 +1,12 @@
 # [PROPOSAL] llm-d-RL  
 
+> **Status: legacy / unmaintained.** This was an earlier exploration of a
+> framework-agnostic Go control plane, taken as a different direction from the
+> EPP-based routing now used in [`integrations/`](../../integrations/) and
+> [`quickstart/`](../../quickstart/). It has had no active development or users
+> for several months. Kept here for reference; not recommended as a starting
+> point for new work.
+
 Framework-agnostic RL rollout infrastructure for the [llm-d](https://github.com/llm-d) inference serving stack.
 
 llm-d-rl provides the control plane that RL training frameworks need to orchestrate inference engines during post-training. It handles weight synchronization, engine lifecycle management, and generation routing so that framework authors don't have to reimplement these primitives.

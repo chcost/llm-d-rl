@@ -4,14 +4,14 @@ Reinforcement-learning rollout infrastructure for the
 [llm-d](https://github.com/llm-d) inference serving stack.
 
 RL post-training frameworks (veRL, OpenRLHF, SkyRL, NeMo-RL, Slime) each need to
-orchestrate a pool of inference engines during training: route generation
-requests efficiently, synchronize updated weights into the engines, and manage
-their lifecycle. This repo provides those pieces for llm-d so frameworks do not
-have to reimplement them per backend.
-
-The repo has two independent components: framework integrations that plug llm-d
-into an existing training loop, and a standalone control plane that orchestrates
-the rollout itself. They can be adopted separately.
+route generation requests to a pool of inference engines during training. This
+repo integrates llm-d's **Endpoint Picker Plugin (EPP)** into that pool as a
+drop-in replacement for round-robin replica selection. EPP scores each candidate
+vLLM replica on prefix-cache hit rate, queue depth, and KV utilization, and steers
+each request to the replica most likely to already have a warm cache. For
+large-group RL workloads (GRPO, PPO with large rollout groups), where many
+samples share a prompt prefix, this is a meaningful throughput win over spreading
+requests evenly.
 
 ```
 llm-d-rl/
@@ -20,26 +20,16 @@ llm-d-rl/
 │   ├── vime/
 │   ├── slime/
 │   └── common/                   # library and configs used by the three above
-└── experimental/
-    └── rl-controller/            # control plane (Go + Python); independent of integrations/
+└── quickstart/                   # a full worked example: cluster + provisioning + benchmarks
 ```
 
 ## integrations/
 
-This section describes how to integrate llm-d into various RL post-training
-frameworks. Supported today: [verl](integrations/verl/) (the most complete - EPP
-routing, llm-d serving, PD and P2P KV-cache sharing),
-[vime](integrations/vime/) (llm-d routing, vLLM engines), and
-[slime](integrations/slime/) (llm-d routing, SGLang engines).
+How to integrate llm-d into an RL post-training framework. Supported today:
+[verl](integrations/verl/) (the most complete - EPP routing, llm-d serving, PD
+and P2P KV-cache sharing), [vime](integrations/vime/) (llm-d routing, vLLM
+engines), and [slime](integrations/slime/) (llm-d routing, SGLang engines).
 Shared code and configs live in [`common/`](integrations/common/).
-
-The common idea is to replace the framework's default round-robin replica
-selection with llm-d's **Endpoint Picker Plugin (EPP)**, which scores each
-candidate vLLM replica on prefix-cache hit rate, queue depth, and KV utilization,
-and steers each request to the replica most likely to already have a warm cache.
-For large-group RL workloads (GRPO, PPO with large rollout groups), where many
-samples share a prompt prefix, this is a meaningful throughput win over spreading
-requests evenly.
 
 There are two integration modes, named by mechanism (EPP is the Endpoint
 *Picker* - it scores and selects a replica, it does not proxy):
@@ -55,48 +45,28 @@ There are two integration modes, named by mechanism (EPP is the Endpoint
 Both modes require no framework source changes - they are wired in entirely
 through configuration - and both support prefill/decode (PD) disaggregation.
 
-See [`integrations/verl/README.md`](integrations/verl/README.md) for the verl
-setup, the config overrides for each mode, PD disaggregation, observability, and
-a complete end-to-end KubeRay example.
+See [`integrations/README.md`](integrations/README.md) and
+[`integrations/verl/README.md`](integrations/verl/README.md) for the full setup,
+the config overrides for each mode, PD disaggregation, observability, and a
+complete end-to-end KubeRay example.
 
-## experimental/rl-controller
+## quickstart/
 
-A framework-agnostic **control plane for orchestrating RL tasks** - weight sync
-and rollout - exposed over plain HTTP. It handles the primitives a training loop
-needs from its inference engine pool: dispatching generation, synchronizing
-updated weights into the engines, and managing engine lifecycle
-(pause/resume/sleep/wake). The core is a standalone Go binary (the "rollout
-controller") with **no Kubernetes dependency** - it talks HTTP to vLLM engines
-and runs on Slurm, bare metal, Docker, or Kubernetes. A companion Python package
-provides the NCCL weight-sync trainer side.
+A full worked example of running the integration on a real cluster: KubeRay
+cluster templates, provisioning scripts, and the benchmark harness the routing
+results above come from. Nothing here is required to adopt the integration
+itself - see [`quickstart/README.md`](quickstart/README.md) for how to run it
+and how it is organised.
 
-Control plane (HTTP) and data plane (NCCL/NIXL) stay separate: the controller
-orchestrates the lifecycle - pause engines, trigger a weight update, reset caches,
-resume - but never proxies weight tensors itself. Generation can be dispatched
-directly to a ready engine or forwarded through llm-d's inference router for
-prefix-cache-aware, session-affinity routing.
+## Legacy
 
-See [`experimental/rl-controller/README.md`](experimental/rl-controller/README.md)
-for the HTTP API, CLI flags, quick start, and deployment manifests.
-
-## How the two relate
-
-Both serve the same goal - efficient inference during RL post-training - at
-different layers. The framework integrations are drop-ins that add cache-aware
-replica selection to an existing training loop; the rollout controller owns the
-full rollout lifecycle (weights, sleep/wake, generation) as a standalone service.
-
-Note the two components each carry a similarly named but distinct Python package:
-`llm-d-rl-verl-integration` under `integrations/verl` is the EPP routing
-integration, while `llmd-verl` under the rollout controller is the NCCL
-weight-sync trainer. They are not the same package.
-
-## Status
-
-This is an experimentation / incubation project. The rollout controller runs
-end-to-end with simulated lifecycle operations and has manifests for testing with
-real vLLM and NCCL weight sync; the verl integration runs on real Ray/KubeRay
-clusters. Interfaces may change.
+[`legacy/rl-controller/`](legacy/rl-controller/) is an earlier exploration of a
+different architectural direction: a framework-agnostic Go/Python control plane
+that owns weight sync, engine lifecycle, and generation routing over plain HTTP,
+with no Kubernetes dependency. It has had no active development or users for
+several months while work moved to the EPP-based routing above. It is kept for
+reference; see [its README](legacy/rl-controller/README.md) for details, but it
+is not the recommended starting point for new work.
 
 ## License
 
