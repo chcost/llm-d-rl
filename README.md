@@ -45,6 +45,52 @@ There are two integration modes, named by mechanism (EPP is the Endpoint
 Both modes require no framework source changes - they are wired in entirely
 through configuration - and both support prefill/decode (PD) disaggregation.
 
+**EPP as the endpoint picker** - the framework asks EPP which replica to use,
+then dispatches the rollout there itself:
+
+```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
+flowchart TD
+    fw["RL rollouts"]
+    epp["llm-d EPP"]
+    fw -->|"1. ask which replica (gRPC)"| epp
+    epp -->|"2. replica id"| fw
+    fw -->|"3. dispatch generate() directly"| v0["vLLM Replica 0"]
+    fw --> v1["vLLM Replica 1"]
+    fw --> vN["vLLM Replica N"]
+
+    classDef caller fill:#EEF2FF,stroke:#4F46E5,color:#1E1B4B
+    classDef llmd fill:#EDE9FE,stroke:#7C3AED,color:#3B0764
+    classDef replica fill:#F5F3FF,stroke:#8B5CF6,color:#3B0764
+    class fw caller
+    class epp llmd
+    class v0,v1,vN replica
+```
+
+**llm-d serving** - the framework sends the rollout to a single Envoy
+endpoint, which consults EPP and forwards to the chosen replica:
+
+```mermaid
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
+flowchart TD
+    fw["RL rollouts"]
+    router["llm-d serving<br/>(Envoy)"]
+    epp["llm-d EPP"]
+    fw -->|"generate() request"| router
+    router -->|"consults"| epp
+    epp -->|"chosen replica"| router
+    router -->|"forward"| v0["vLLM Replica 0"]
+    router --> v1["vLLM Replica 1"]
+    router --> vN["vLLM Replica N"]
+
+    classDef caller fill:#EEF2FF,stroke:#4F46E5,color:#1E1B4B
+    classDef llmd fill:#EDE9FE,stroke:#7C3AED,color:#3B0764
+    classDef replica fill:#F5F3FF,stroke:#8B5CF6,color:#3B0764
+    class fw caller
+    class router,epp llmd
+    class v0,v1,vN replica
+```
+
 See [`integrations/README.md`](integrations/README.md) and
 [`integrations/verl/README.md`](integrations/verl/README.md) for the full setup,
 the config overrides for each mode, PD disaggregation, observability, and a
