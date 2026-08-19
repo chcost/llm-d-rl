@@ -15,7 +15,7 @@ import time
 
 import ray
 
-from llm_d_rl_verl_integration.p2p_addressing import p2p_listener_host
+from llm_d_rl_verl_bench.inproc_sidecar.p2p_addressing import p2p_listener_host
 
 logger = logging.getLogger(__name__)
 

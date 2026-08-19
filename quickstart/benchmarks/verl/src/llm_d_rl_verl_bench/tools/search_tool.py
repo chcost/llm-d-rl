@@ -8,7 +8,7 @@ observation each turn - routing and reqlog are unaffected, so the same
 native/EPP comparison tooling applies per turn.
 
 Registered from a tool_config.yaml via the dotted class_name
-``llm_d_rl_verl_integration.tools.search_tool.SearchTool`` with
+``llm_d_rl_verl_bench.tools.search_tool.SearchTool`` with
 
     config: {retrieval_service_url: "http://<svc>:8000/retrieve", topk: 3, type: native}
 

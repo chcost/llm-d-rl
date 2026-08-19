@@ -14,5 +14,5 @@ TODO: headline native-vs-EPP numbers for this workload. Raw runs are kept out of
 
 - `task.env` - verl overrides sourced by `run_test.sh --task searchr1`.
 - Data builder: `make_searchr1.py`.
-- `tool_config.yaml` - registers the `search` tool (resolves to `llm_d_rl_verl_integration.tools.search_tool.SearchTool`).
+- `tool_config.yaml` - registers the `search` tool (resolves to `llm_d_rl_verl_bench.tools.search_tool.SearchTool`).
 - `retriever/` - the BM25 retrieval side-service (Dockerfile, server, k8s manifest).

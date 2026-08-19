@@ -14,19 +14,19 @@ registries have the "vllm-llmd-p2p" entry before anything looks it up:
     to matter and at the cost of importing vLLM eagerly, and no longer does.
 
 In the run script:
-    actor_rollout_ref.model.external_lib=llm_d_rl_verl_integration.register_p2p
+    actor_rollout_ref.model.external_lib=llm_d_rl_verl_bench.inproc_sidecar.register_p2p
 """
 
 from verl.workers.rollout.base import _ROLLOUT_REGISTRY
 from verl.workers.rollout.replica import RolloutReplicaRegistry
 
 _ROLLOUT_REGISTRY[("vllm-llmd-p2p", "async")] = (
-    "llm_d_rl_verl_integration.p2p_replica.P2PServerAdapter"
+    "llm_d_rl_verl_bench.inproc_sidecar.p2p_replica.P2PServerAdapter"
 )
 
 
 def _load_llmd_p2p():
-    from llm_d_rl_verl_integration.p2p_replica import P2PEngineReplicaFactory
+    from llm_d_rl_verl_bench.inproc_sidecar.p2p_replica import P2PEngineReplicaFactory
     return P2PEngineReplicaFactory
 
 

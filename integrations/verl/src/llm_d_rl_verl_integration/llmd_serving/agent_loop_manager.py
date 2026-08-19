@@ -25,18 +25,6 @@ from llm_d_rl_verl_integration.base_agent_loop_manager import LlmdBaseAgentLoopM
 from llm_d_rl_verl_integration.llmd_actor import LlmdActor, start_kwargs
 from llm_d_rl_verl_integration.llmd_serving.llm_client import EnvoyLLMClient
 from verl.workers.rollout.llm_server import LLMServerClient
-from verl.workers.rollout.replica import RolloutReplicaRegistry
-from llm_d_rl_verl_integration.pd_replica import PDEngineReplicaFactory
-
-
-def _load_llmd_pd():
-    return PDEngineReplicaFactory
-
-
-# Register vllm-llmd-pd at import time — this module is imported before
-# LLMServerManager.create() calls get_rollout_replica_class(), so the
-# registration is always in place when needed.
-RolloutReplicaRegistry.register("vllm-llmd-pd", _load_llmd_pd)
 
 logger = logging.getLogger(__name__)
 

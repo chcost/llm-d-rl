@@ -12,7 +12,7 @@ To use, set in the training YAML config:
       rollout:
         name: vllm
         agent:
-          agent_loop_manager_class: llm_d_rl_verl_integration.native_logging.agent_loop_manager.NativeLoggingAgentLoopManager
+          agent_loop_manager_class: llm_d_rl_verl_bench.native_logging.agent_loop_manager.NativeLoggingAgentLoopManager
         custom:
           epp_endpoints_file: /tmp/epp-endpoints.yaml   # optional, for the scraper
 """
@@ -25,7 +25,7 @@ from omegaconf import OmegaConf
 
 from llm_d_rl_verl_integration.base_agent_loop_manager import LlmdBaseAgentLoopManager
 from llm_d_rl_common.endpoints import write_rollout_endpoints
-from llm_d_rl_verl_integration.native_logging.llm_client import LoggingLLMClient
+from llm_d_rl_verl_bench.native_logging.llm_client import LoggingLLMClient
 from verl.workers.rollout.llm_server import LLMServerClient
 
 logger = logging.getLogger(__name__)

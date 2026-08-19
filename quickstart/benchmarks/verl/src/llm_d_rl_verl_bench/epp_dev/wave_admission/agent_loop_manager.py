@@ -18,12 +18,12 @@ import ray
 from omegaconf import OmegaConf
 
 from llm_d_rl_verl_integration.base_agent_loop_manager import LlmdBaseAgentLoopManager
-from llm_d_rl_verl_integration.p2p_addressing import DEFAULT_P2P_CONNECTOR_PORT
-from llm_d_rl_verl_integration.wave_admission.admission import (
+from llm_d_rl_verl_bench.inproc_sidecar.p2p_addressing import DEFAULT_P2P_CONNECTOR_PORT
+from llm_d_rl_verl_bench.epp_dev.wave_admission.admission import (
     AdmissionLedger,
     compute_budget_tokens_per_replica,
 )
-from llm_d_rl_verl_integration.wave_admission.llm_client import WaveAdmissionLLMClient
+from llm_d_rl_verl_bench.epp_dev.wave_admission.llm_client import WaveAdmissionLLMClient
 from llm_d_rl_common.endpoints import write_rollout_endpoints
 from verl.workers.rollout.llm_server import LLMServerClient
 
