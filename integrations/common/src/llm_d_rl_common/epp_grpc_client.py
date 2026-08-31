@@ -185,6 +185,7 @@ class EPPGrpcClient:
         request_id: str,
         *,
         track_completion: bool = False,
+        cache_salt: Optional[str] = None,
     ) -> RoutingResult:
         """Route a request through EPP and return the decision plus a completion hook.
 
@@ -193,30 +194,45 @@ class EPPGrpcClient:
         so callers never need to know either protocol exists. Call
         ``result.complete(ntok)`` unconditionally when generation finishes; it
         does the real report to EPP in tracked mode and nothing otherwise.
+
+        ``cache_salt``: forwarded to EPP, which folds it into the prefix-hash seed
+        (see EPP's own ``prefixhash`` package). EPP's block hashing only ever looks
+        at token IDs -- never multimodal content -- so requests whose TEXT tokens
+        are identical (e.g. a fixed-template multimodal prompt where only the image
+        differs) hash identically and are treated as one prefix-sharing group
+        regardless of image content. Pass a value that is identical within a real
+        GRPO group and distinct across groups (e.g. ``sample_index``) to restore
+        correct group-boundary separation for that case; omit it for workloads
+        where distinct text already implies distinct groups (the common case).
         """
         if track_completion:
-            stream = await self.begin(model, prompt_ids, request_id)
+            stream = await self.begin(model, prompt_ids, request_id, cache_salt=cache_salt)
 
             async def _complete(output_tokens: int = 0) -> None:
                 await self.complete(stream, output_tokens)
 
             return RoutingResult(stream.endpoint, stream.sidecar, _complete)
 
-        endpoint, sidecar_headers = await self.pick(model, prompt_ids)
+        endpoint, sidecar_headers = await self.pick(model, prompt_ids, cache_salt=cache_salt)
 
         async def _noop(output_tokens: int = 0) -> None:
             return None
 
         return RoutingResult(endpoint, sidecar_headers, _noop)
 
-    async def pick(self, model: str, prompt_ids: list[int]) -> tuple[Optional[str], dict[str, str]]:
+    async def pick(
+        self, model: str, prompt_ids: list[int], *, cache_salt: Optional[str] = None
+    ) -> tuple[Optional[str], dict[str, str]]:
         """Ask EPP which endpoint to route this request to.
 
         Returns:
             (endpoint, sidecar_headers) where endpoint is ``host:port`` or None.
             sidecar_headers contains all EPP-set headers except the destination header.
         """
-        body = json.dumps({"model": model, "token_ids": prompt_ids}).encode()
+        payload = {"model": model, "token_ids": prompt_ids}
+        if cache_salt:
+            payload["cache_salt"] = cache_salt
+        body = json.dumps(payload).encode()
         req_headers = _encode_request_headers([
             (":method", b"POST"),
             (":path", b"/inference/v1/generate"),
@@ -238,7 +254,9 @@ class EPPGrpcClient:
 
         return None, {}
 
-    async def begin(self, model: str, prompt_ids: list[int], request_id: str) -> _RequestStream:
+    async def begin(
+        self, model: str, prompt_ids: list[int], request_id: str, *, cache_salt: Optional[str] = None
+    ) -> _RequestStream:
         """Like ``pick()``, but leaves the stream's send side open after the
         routing decision so ``complete()`` can later report the response phase.
 
@@ -247,7 +265,10 @@ class EPPGrpcClient:
         active-request-scorer or a per-endpoint concurrency cap) rather than the
         pick-time snapshot ``pick()`` produces.
         """
-        body = json.dumps({"model": model, "token_ids": prompt_ids}).encode()
+        payload = {"model": model, "token_ids": prompt_ids}
+        if cache_salt:
+            payload["cache_salt"] = cache_salt
+        body = json.dumps(payload).encode()
         req_headers = _encode_request_headers([
             (":method", b"POST"),
             (":path", b"/inference/v1/generate"),
